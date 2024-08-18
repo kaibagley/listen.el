@@ -19,7 +19,7 @@
 
 ;;; Commentary:
 
-;; 
+;;
 
 ;;; Code:
 
@@ -139,8 +139,6 @@ return a list of values; otherwise return the sole value."
 
 ;;;; Functions
 
-;; FIXME: Declare this differently or something.
-(declare-function make-listen-player-vlc "listen-vlc")
 (defun listen-current-player ()
   "Return variable `listen-player' or a newly set one if nil."
   (or listen-player

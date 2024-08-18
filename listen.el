@@ -60,6 +60,8 @@
 (require 'map)
 
 (require 'listen-lib)
+;; TODO: Can we load these as-needed?
+(require 'listen-mpv)
 (require 'listen-vlc)
 
 ;;;; Variables
@@ -123,6 +125,14 @@ its current track will be the one that just finished playing)."
   "Allow the player to show a window for video if applicable.
 Intended to be toggled from `listen-menu'."
   :type 'boolean)
+
+(defcustom listen-backend
+  (cond ((executable-find "mpv") #'make-listen-player-mpv)
+        ((executable-find "vlc") #'make-listen-player-vlc)
+        (t (display-warning 'listen-backend "Unable to find MPV or VLC." :error)))
+  "Player backend."
+  :type '(choice (const :tag "MPV" make-listen-player-mpv)
+                 (const :tag "VLC" make-listen-player-vlc)))
 
 ;;;; Commands
 
