@@ -141,6 +141,7 @@ return a list of values; otherwise return the sole value."
 
 (defun listen-current-player ()
   "Return variable `listen-player' or a newly set one if nil."
+  (defvar listen-backend)
   (or listen-player
       (setf listen-player (pcase listen-show-video
                             ('t (make-listen-player-vlc))
