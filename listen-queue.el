@@ -489,6 +489,7 @@ Completes files with `listen-complete-files', which see."
   (listen-queue queue)
   queue)
 
+;; TODO: Look into utilising this function for Subsonic support
 (cl-defun listen-queue-add-urls (urls queue)
   "Add URLS to QUEUE."
   (interactive
@@ -499,29 +500,27 @@ Completes files with `listen-complete-files', which see."
   (listen-queue queue)
   queue)
 
+(defun listen-queue-track-id-key (track)
+  "Generate unique strink key for TRACK."
+  (or (map-elt (listen-track-etc track) 'id)
+      (expand-file-name (listen-track-filename track))))
+
 (defun listen-queue-add-tracks (tracks queue)
   "Add TRACKS to QUEUE.
-Duplicate tracks are removed from the queue.
+Duplicate tracks are detected using a hash table.
 The queue's buffer is updated, if any."
-  (cl-callf append (listen-queue-tracks queue) tracks)
-  (setf (listen-queue-tracks queue)
-        (cl-delete-duplicates
-         (listen-queue-tracks queue)
-         :key (lambda (track)
-                (let ((file (listen-track-filename track)))
-                  (if (string-prefix-p "http" file)
-                      ;; URL - use id to detect duplication
-                      (if (string-match "[?&]id=\\([^&]+\\)" file)
-                          (match-string 1 file)
-                        file)
-                    ;; File
-                    (expand-file-name file))))
-         :test (lambda (t1 t2)
-                 (if (or (string-prefix-p "http" t1)
-                         (string-prefix-p "http" t2))
-                     (equal t1 t2)
-                   (file-equal-p t1 t2)))))
-  (listen-queue--update-buffer queue)
+  (let ((seen (make-hash-table :test 'equal))
+        (to-add nil))
+    (dolist (track (listen-queue-tracks queue))
+      (puthash (listen-queue-track-id-key track) t seen))
+    (dolist (track tracks)
+      (let ((key (listen-queue-track-id-key track)))
+        (unless (gethash key seen)
+          (puthash key t seen)
+          (push track to-add))))
+    (when to-add
+      (cl-callf append (listen-queue-tracks queue) (nreverse to-add))
+      (listen-queue--update-buffer queue)))
   queue)
 
 (cl-defun listen-queue-add-from-playlist-file (filename queue)

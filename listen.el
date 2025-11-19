@@ -499,9 +499,9 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
     ("qap" "from playlist file" listen-queue-add-from-playlist-file
      :transient t)]
    ["Subsonic"
-    ("qns" "search Subsonic server" listen-queue-add-from-subsonic
+    ("qvs" "search" listen-queue-add-from-subsonic
      :transient t)
-    ("qna" "search Subsonic server" listen-queue-add-starred-from-subsonic
+    ("qva" "queue starred" listen-queue-add-starred-from-subsonic
      :transient t)]])
 
 ;; NOTE: This alias must come after the command it refers to, otherwise the autoload file fails to
