@@ -451,9 +451,11 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
 
    ["Library view"
     ("lf" "from files" listen-library)
-    ("lm" "from MPD" listen-library-from-mpd)
     ("lq" "from queue" listen-library-from-queue)
-    ("lp" "from playlist file" listen-library-from-playlist-file)]]
+    ("lp" "from playlist file" listen-library-from-playlist-file)]
+   [""
+    ("ls" "from subsonic" listen-library-from-subsonic)
+    ("lm" "from MPD" listen-library-from-mpd)]]
 
   [["Queue mode"
     :description

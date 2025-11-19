@@ -133,7 +133,9 @@ PARAMS is an alist of additional parameters."
     (with-current-buffer (url-retrieve-synchronously full-url)
       (goto-char (point-min))
       (when (re-search-forward "\n\n" nil t)
-        (let* ((json-string (buffer-substring-no-properties (point) (point-max)))
+        (let* ((json-string (decode-coding-string
+                             (buffer-substring-no-properties (point) (point-max))
+                             'utf-8))
                (json-data (json-read-from-string json-string))
                (response (cdr (assoc 'subsonic-response json-data))))
           (if (string-equal "ok" (cdr (assoc 'status response)))
@@ -237,6 +239,21 @@ PARAMS is an alist of additional parameters."
                    (listen-queue-name queue))
           (listen-queue queue))
       (message "No tracks found or added to '%s'" query))))
+
+(defun listen-library-from-subsonic (source)
+  "Show a library view for subsonic."
+  (interactive
+   (list (completing-read "Source: "
+                          '("Starred" "Search") nil t)))
+  (let ((tracks-fn
+         (pcase source
+           ("Starred"
+            (lambda () (navidrome-get-starred-tracks)))
+           ("Search"
+            (let ((query (read-string "Search: ")))
+              (lambda () (navidrome-search-tracks query)))))))
+    (listen-library tracks-fn
+                    :name (format "Subsonic: %s" source))))
 
 (provide 'listen-subsonic)
 ;;; listen-subsonic.el ends here
