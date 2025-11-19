@@ -19,7 +19,7 @@
 
 ;;; Commentary:
 
-;; 
+;;
 
 ;;; Code:
 
@@ -501,16 +501,26 @@ Completes files with `listen-complete-files', which see."
 
 (defun listen-queue-add-tracks (tracks queue)
   "Add TRACKS to QUEUE.
-Duplicate tracks (by filename) are removed from the queue, and
-the queue's buffer is updated, if any."
+Duplicate tracks are removed from the queue.
+The queue's buffer is updated, if any."
   (cl-callf append (listen-queue-tracks queue) tracks)
-  ;; TODO: Consider updating the metadata of any duplicate tracks.
   (setf (listen-queue-tracks queue)
-        (cl-delete-duplicates (listen-queue-tracks queue)
-                              :key (lambda (track)
-                                     (expand-file-name (listen-track-filename track)))
-                              :test #'file-equal-p))
-  (listen-queue--update-buffer queue))
+        (cl-delete-duplicates
+         (listen-queue-tracks queue)
+         :key (lambda (track)
+                (let ((file (listen-track-filename track)))
+                  (if (string-prefix-p "http" file)
+                      ;; URL
+                      (car (split-string file "?"))
+                    ;; File
+                    (expand-file-name file))))
+         :test (lambda (t1 t2)
+                 (if (or (string-prefix-p "http" t1)
+                         (string-prefix-p "http" t2))
+                     (equal t1 t2)
+                   (file-equal-p t1 t2)))))
+  (listen-queue--update-buffer queue)
+  queue)
 
 (cl-defun listen-queue-add-from-playlist-file (filename queue)
   "Add tracks to QUEUE selected from playlist at FILENAME.

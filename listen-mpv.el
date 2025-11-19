@@ -19,7 +19,7 @@
 
 ;;; Commentary:
 
-;; 
+;;
 
 ;;; Code:
 
@@ -89,6 +89,7 @@
         (sleep-for 1)
         (setf (map-elt (listen-player-etc player) :network-process)
               (make-network-process :name "listen-player-mpv-socket" :family 'local
+                                    :service t
                                     :remote socket :noquery t
                                     :buffer socket-buffer)))
       (set-process-query-on-exit-flag (listen-player-process player) nil))))
@@ -96,7 +97,10 @@
 (cl-defmethod listen--play ((player listen-player-mpv) file)
   "Play FILE with PLAYER.
 Stops playing, clears playlist, adds FILE, and plays it."
-  (listen--send player "loadfile" (expand-file-name file)))
+  (let ((path (if (string-prefix-p "http" file)
+                  file
+                (expand-file-name file))))
+    (listen--send player "loadfile" path)))
 
 ;; (cl-defmethod listen--stop ((player listen-player-mpv))
 ;;   "Stop playing with PLAYER."

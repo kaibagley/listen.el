@@ -63,6 +63,7 @@
 ;; TODO: Can we load these as-needed?
 (require 'listen-mpv)
 (require 'listen-vlc)
+(require 'listen-subsonic)
 
 ;;;; Variables
 
@@ -496,7 +497,27 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
     ("qam" "from MPD" listen-queue-add-from-mpd
      :transient t)
     ("qap" "from playlist file" listen-queue-add-from-playlist-file
+     :transient t)
+    ("qas" "from playlist file" listen-queue-add-from-subsonic
      :transient t)]])
+
+(defun listen-queue-add-from-subsonic (query queue)
+  "Search Navidrome for QUERY and add results to the current queue."
+  (interactive
+   (let ((query (read-string "Search Navidrome: ")))
+     (list query
+           (progn
+             (require 'listen-queue)
+             (listen-queue-complete :allow-new-p t)))))
+  (let ((tracks (navidrome-search-tracks query)))
+    (if tracks
+        (progn
+          (listen-queue-add-tracks tracks queue)
+          (message "Added %d tracks from Navidrome to queue '%s'."
+                   (length tracks)
+                   (listen-queue-name queue))
+          (listen-queue queue))
+      (message "No tracks found for '%s'" query))))
 
 ;; NOTE: This alias must come after the command it refers to, otherwise the autoload file fails to
 ;; finish loading (without warning), which breaks a lot of things!
