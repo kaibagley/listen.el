@@ -72,30 +72,37 @@ e.g., \"https://music.example.com\""
         (base (concat "https://" navidrome-server-url "/rest/stream.view")))
     (navidrome--build-url base params)))
 
+(defun navidrome--json-to-listen (s)
+  "Convert JSON alist into a listen.el `listen-track' structure."
+  (let ((id (cdr (assoc 'id s))))
+    ;; filename artist title album number genre (duration 0) date rating etc metadata)
+    (make-listen-track
+     :filename (navidrome--get-stream-url id) ; silly mpv
+     :artist (cdr (assoc 'artist s))
+     :title (cdr (assoc 'title s))
+     :album (cdr (assoc 'album s))
+     :number (number-to-string (or (cdr (assoc 'track s)) 0))
+     :genre (cdr (assoc 'genre s))
+     :duration (or (cdr (assoc 'duration s)) 0)
+     :date (cdr (assoc 'year s))
+     :rating (cdr (assoc 'userRating s))
+     :metadata '((source . "navidrome"))
+     :etc `((source . "navidrome")
+            (id . ,id)))))
+
 (defun navidrome-search-tracks (query)
   "Search Navidrome and return a list of `listen-track' objects."
-  (require 'listen-lib)
-  (let* ((params (append '(("query" . query))))
-         (response (navidrome--api-call "search3" `(("query" . ,query) ("songCount" . "50"))))
+  (let* ((response (navidrome--api-call "search3" `(("query" . ,query) ("songCount" . "50"))))
          (search-result (cdr (assoc 'searchResult3 response)))
          (songs (cdr (assoc 'song search-result))))
-    (mapcar (lambda (s)
-              (let ((id (cdr (assoc 'id s))))
-                ;; filename artist title album number genre (duration 0) date rating etc metadata)
-                (make-listen-track
-                 :filename (navidrome--get-stream-url id) ; silly mpv
-                 :artist (cdr (assoc 'artist s))
-                 :title (cdr (assoc 'title s))
-                 :album (cdr (assoc 'album s))
-                 :number (number-to-string (or (cdr (assoc 'track s)) 0)) ;; this is expected to be a string?
-                 :genre (cdr (assoc 'genre s))
-                 :duration (or (cdr (assoc 'duration s)) 0)
-                 :date (cdr (assoc 'year s))
-                 :rating (cdr (assoc 'userRating s))
-                 :metadata s
-                 :etc `((source . "navidrome")
-                        (id . ,id)))))
-            songs)))
+    (mapcar #'navidrome--json-to-listen songs)))
+
+(defun navidrome-get-starred-tracks ()
+  "Fetch all starred songs from Navidrome."
+  (let* ((response (navidrome--api-call "getStarred"))
+         (starred-result (cdr (assoc 'starred response)))
+         (songs (cdr (assoc 'song starred-result))))
+    (mapcar #'navidrome--json-to-listen songs)))
 
 (defun navidrome--api-call (endpoint &optional params)
   "Make a call to the Subsonic API and return the parsed JSON.
@@ -180,6 +187,56 @@ PARAMS is an alist of additional parameters."
     (when chosen-song
       (navidrome--play-stream (cdr (assoc 'id chosen-song))))))
 
+;; FIXME: Seems to add all tracks, not just starred...
+(defun listen-queue-add-starred-from-subsonic (queue)
+  "Add all starred songs from Navidrome to QUEUE."
+  (interactive (list
+                (progn
+                  (require 'listen-queue)
+                  (listen-queue-complete :allow-new-p t))))
+  (let ((tracks (navidrome-get-starred-tracks)))
+    (if tracks
+        (progn
+          (listen-queue-add-tracks tracks queue)
+          (message "Added %d tracks to queue '%s'."
+                   (length tracks) (listen-queue-name queue))
+          (listen-queue queue))
+      (message "No starred songs found."))))
+
+;; TODO: C-u adds to start of queue/next?
+(defun listen-queue-add-from-subsonic (query queue)
+  "Search Navidrome for QUERY and add results to the current queue."
+  (interactive
+   (let ((query (read-string "Search Navidrome: ")))
+     (list query
+           (progn
+             (require 'listen-queue)
+             (listen-queue-complete :allow-new-p t)))))
+  (let* ((tracks (navidrome-search-tracks query))
+         (candidates (mapcar
+                      (lambda (track)
+                        (cons (format "%s - %s (%s)"
+                                      (listen-track-artist track)
+                                      (listen-track-title track)
+                                      (listen-track-album track))
+                              track))
+                      tracks))
+         (selected-names (if tracks
+                             (completing-read-multiple "Select tracks (CRM): "
+                                                       candidates
+                                                       nil t)
+                           nil))
+         (selected-tracks (mapcar
+                           (lambda (name) (cdr (assoc name candidates)))
+                           selected-names)))
+    (if selected-tracks
+        (progn
+          (listen-queue-add-tracks selected-tracks queue)
+          (message "Added %d tracks from Navidrome to queue '%s'."
+                   (length tracks)
+                   (listen-queue-name queue))
+          (listen-queue queue))
+      (message "No tracks found or added to '%s'" query))))
 
 (provide 'listen-subsonic)
 ;;; listen-subsonic.el ends here

@@ -510,8 +510,10 @@ The queue's buffer is updated, if any."
          :key (lambda (track)
                 (let ((file (listen-track-filename track)))
                   (if (string-prefix-p "http" file)
-                      ;; URL
-                      (car (split-string file "?"))
+                      ;; URL - use id to detect duplication
+                      (if (string-match "[?&]id=\\([^&]+\\)" file)
+                          (match-string 1 file)
+                        file)
                     ;; File
                     (expand-file-name file))))
          :test (lambda (t1 t2)
