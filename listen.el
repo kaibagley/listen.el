@@ -336,6 +336,8 @@ According to `listen-lighter-format', which see."
       ;; TODO: Remove this (I think it's not necessary anymore).
       (force-mode-line-update 'all))))
 
+;; TODO: (at least) with Navidrome, there is a gap between playback currently, and thus the lighter
+;; will vanish and reappear in between songs.
 (defun listen-play-next (player)
   "Play PLAYER's queue's next track and return non-nil if playing."
   (when-let ((queue (map-elt (listen-player-etc player) :queue)))
