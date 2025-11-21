@@ -63,7 +63,7 @@ e.g., \"https://music.example.com\""
       ("t" . ,token)
       ("s" . ,salt)
       ("v" . "1.16.1")
-      ("c" . "listen-el")
+      ("c" . "listen.el")
       ("f" . "json"))))
 
 (defun navidrome--get-stream-url (id)
@@ -75,7 +75,6 @@ e.g., \"https://music.example.com\""
 (defun navidrome--json-to-listen (s)
   "Convert JSON alist into a listen.el `listen-track' structure."
   (let ((id (cdr (assoc 'id s))))
-    ;; filename artist title album number genre (duration 0) date rating etc metadata)
     (make-listen-track
      :filename (navidrome--get-stream-url id) ; silly mpv
      :artist (cdr (assoc 'artist s))
@@ -86,6 +85,7 @@ e.g., \"https://music.example.com\""
      :duration (or (cdr (assoc 'duration s)) 0)
      :date (cdr (assoc 'year s))
      :rating (cdr (assoc 'userRating s))
+     ;; every tag should get dumped into the metadata (i think)
      :metadata '((source . "navidrome"))
      :etc `((source . "navidrome")
             (id . ,id)))))
@@ -119,7 +119,7 @@ PARAMS is an alist of additional parameters."
                                ("t" . ,token)
                                ("s" . ,salt)
                                ("v" . "1.16.1")
-                               ("c" . "navimacs")
+                               ("c" . "listen.el")
                                ("f" . "json"))
                              params))
          (api-url (concat "https://"
@@ -153,7 +153,7 @@ PARAMS is an alist of additional parameters."
                    ("t" . ,token)
                    ("s" . ,salt)
                    ("v" . "1.16.1")
-                   ("c" . "emacs-navidrome")
+                   ("c" . "listen.el")
                    ("id" . ,id)))
          (api-url (concat "https://" navidrome-server-url "/rest/stream.view"))
          (stream-url (navidrome--build-url api-url params)))
