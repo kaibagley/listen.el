@@ -404,6 +404,7 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
   ["Listen"
    :description
    ;; TODO: Try using `transient-info' class for this line.
+   ;; TODO: Doesn't display current song properly after listen-next with :transient t
    (lambda ()
      (if listen-player
          (concat "Listening: " (listen-mode-lighter))
@@ -436,7 +437,7 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
     :description
     (lambda ()
       (if listen-player
-          (format "Volume: %.0f%%" (listen--volume listen-player))
+          (format "Volume: %3.0f%%" (or (listen--volume listen-player) 0))
         "Volume: N/A"))
     ("=" "Set" listen-volume)
     ("v" "Down" (lambda ()
