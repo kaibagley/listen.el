@@ -495,6 +495,7 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
     ("qD" "Discard" listen-queue-discard
      :transient t)]
    ["Tracks"
+    ;; TODO: Grey-out when using Subsonic
     ("qj" "Jump to current in Dired" listen-jump)
     ("qt" "Play track" (lambda ()
                          "Call `listen-queue-play' with prefix."
