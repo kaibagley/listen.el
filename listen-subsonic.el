@@ -1,35 +1,31 @@
 ;;; listen-subsonic.el                    -*- lexical-binding: t; -*-
 
+;; TODO: Look at using plz.el for http requests
 (require 'url)
 (require 'json)
 (require 'auth-source)
 
-(defgroup navidrome nil
-  "A minimal from-scratch Navidrome/Subsonic client."
-  :group 'applications)
+(defgroup listen-subsonic nil
+  "Navidrome/Subsonic options."
+  :group 'listen)
 
-(defcustom navidrome-server-url "music.biglarge.win"
+(defcustom listen-subsonic-url "music.biglarge.win"
   "The base URL of your Navidrome/Subsonic server.
 e.g., \"https://music.example.com\""
   :type 'string
-  :group 'navidrome)
-
-(defcustom navidrome-player "mpv"
-  "The external command used to play music."
-  :type 'string
-  :group 'navidrome)
+  :group 'listen-subsonic)
 
 ;;;###
 ;;; Internal Helper Functions
 ;;;###
 
-(defun navidrome--get-credentials ()
+(defun listen-subsonic--get-credentials ()
   "Fetch user credentials securely from `auth-source`."
-  (let ((auth (auth-source-search :host navidrome-server-url)))
+  (let ((auth (auth-source-search :host listen-subsonic-url)))
     (when auth
       (car auth))))
 
-(defun navidrome--random-string (length)
+(defun listen-subsonic--random-string (length)
   "Generates a random string, for use as a token in a Subsonic request."
   (let* ((letters "abcdefghijklmnopqrstuvwxyz")
          (let-len (length letters))
@@ -38,7 +34,7 @@ e.g., \"https://music.example.com\""
           (mapcar (lambda (_) (aref letters (random let-len))) rand-list))
     (concat rand-list)))
 
-(defun navidrome--build-url (base-url params)
+(defun listen-subsonic--build-url (base-url params)
   "Build a URL from BASE-URL and PARAMS, to be used as an API call to
 Subsonic."
   (if (null params)
@@ -53,12 +49,12 @@ Subsonic."
              params
              "&"))))
 
-(defun navidrome--get-auth-params ()
+(defun listen-subsonic--get-auth-params ()
   "Return auth info alist for API calls."
-  (let* ((creds (navidrome--get-credentials))
+  (let* ((creds (listen-subsonic--get-credentials))
          (user (plist-get creds :user))
          (pass (funcall (plist-get creds :secret)))
-         (salt (navidrome--random-string 6))
+         (salt (listen-subsonic--random-string 6))
          (token (md5 (concat pass salt))))
     `(("u" . ,user)
       ("t" . ,token)
@@ -67,17 +63,17 @@ Subsonic."
       ("c" . "listen.el")
       ("f" . "json"))))
 
-(defun navidrome--get-stream-url (id)
+(defun listen-subsonic--get-stream-url (id)
   "Return a signed url for MPV to play directly."
-  (let ((params (append (navidrome--get-auth-params) `(("id" . ,id))))
-        (base (concat "https://" navidrome-server-url "/rest/stream.view")))
-    (navidrome--build-url base params)))
+  (let ((params (append (listen-subsonic--get-auth-params) `(("id" . ,id))))
+        (base (concat "https://" listen-subsonic-url "/rest/stream.view")))
+    (listen-subsonic--build-url base params)))
 
-(defun navidrome--json-to-listen (s)
+(defun listen-subsonic--json-to-listen (s)
   "Convert JSON alist into a listen.el `listen-track' structure."
   (let ((id (cdr (assoc 'id s))))
     (make-listen-track
-     :filename (navidrome--get-stream-url id) ; silly mpv
+     :filename (listen-subsonic--get-stream-url id) ; silly mpv
      :artist (cdr (assoc 'artist s))
      :title (cdr (assoc 'title s))
      :album (cdr (assoc 'album s))
@@ -91,30 +87,30 @@ Subsonic."
      :etc `((source . "navidrome")
             (id . ,id)))))
 
-(defun navidrome-search-tracks (query)
+(defun listen-subsonic-search-tracks (query)
   "Search Navidrome and return a list of `listen-track' objects."
-  (let* ((response (navidrome--api-call "search3" `(("query" . ,query) ("songCount" . "50"))))
+  (let* ((response (listen-subsonic--api-call "search3" `(("query" . ,query) ("songCount" . "50"))))
          (search-result (cdr (assoc 'searchResult3 response)))
          (songs (cdr (assoc 'song search-result))))
-    (mapcar #'navidrome--json-to-listen songs)))
+    (mapcar #'listen-subsonic--json-to-listen songs)))
 
-(defun navidrome-get-starred-tracks ()
+(defun listen-subsonic-get-starred-tracks ()
   "Fetch all starred songs from Navidrome."
-  (let* ((response (navidrome--api-call "getStarred"))
+  (let* ((response (listen-subsonic--api-call "getStarred"))
          (starred-result (cdr (assoc 'starred response)))
          (songs (cdr (assoc 'song starred-result))))
-    (mapcar #'navidrome--json-to-listen songs)))
+    (mapcar #'listen-subsonic--json-to-listen songs)))
 
-(defun navidrome--api-call (endpoint &optional params)
+(defun listen-subsonic--api-call (endpoint &optional params)
   "Make a call to the Subsonic API and return the parsed JSON.
 ENDPOINT is the API method, e.g., \"ping\" or \"getAlbumList2\".
 PARAMS is an alist of additional parameters."
-  (unless navidrome-server-url
-    (error "Please set `navidrome-server-url` first"))
-  (let* ((creds (navidrome--get-credentials))
+  (unless listen-subsonic-url
+    (error "Please set `listen-subsonic-url' first"))
+  (let* ((creds (listen-subsonic--get-credentials))
          (user (plist-get creds :user))
          (pass (funcall (plist-get creds :secret)))
-         (salt (navidrome--random-string 6))
+         (salt (listen-subsonic--random-string 6))
          (token (md5 (concat pass salt)))
          (api-params (append `(("u" . ,user)
                                ("t" . ,token)
@@ -124,13 +120,13 @@ PARAMS is an alist of additional parameters."
                                ("f" . "json"))
                              params))
          (api-url (concat "https://"
-                          navidrome-server-url
+                          listen-subsonic-url
                           "/rest/"
                           endpoint
                           ".view"))
          (url-request-method "GET")
          (url-request-extra-headers `(("Content-Type" . "application/json")))
-         (full-url (navidrome--build-url api-url api-params)))
+         (full-url (listen-subsonic--build-url api-url api-params)))
     (with-current-buffer (url-retrieve-synchronously full-url)
       (goto-char (point-min))
       (when (re-search-forward "\n\n" nil t)
@@ -143,39 +139,21 @@ PARAMS is an alist of additional parameters."
               response
             (error "Navidrome API Error: %s" (cdr (assoc 'message (cdr (assoc 'error response)))))))))))
 
-(defun navidrome--play-stream (id)
-  "Stream a track with the given ID to an external player."
-  (let* ((creds (navidrome--get-credentials))
-         (user (plist-get creds :user))
-         (pass (funcall (plist-get creds :secret)))
-         (salt (navidrome--random-string 6))
-         (token (md5 (concat pass salt)))
-         (params `(("u" . ,user)
-                   ("t" . ,token)
-                   ("s" . ,salt)
-                   ("v" . "1.16.1")
-                   ("c" . "listen.el")
-                   ("id" . ,id)))
-         (api-url (concat "https://" navidrome-server-url "/rest/stream.view"))
-         (stream-url (navidrome--build-url api-url params)))
-    (message "Streaming track ID: %s" id)
-    (start-process "navidrome-player" nil navidrome-player stream-url)))
-
 ;;;###
 ;;; User-Facing Interactive Functions
 ;;;###
 
-(defun navidrome-ping-server ()
+(defun listen-subsonic-ping-server ()
   "Ping the server to check connectivity and authentication."
   (interactive)
-  (if (navidrome--api-call "ping")
+  (if (listen-subsonic--api-call "ping")
       (message "Successfully pinged Navidrome server!")
     (message "Failed to ping server.")))
 
-(defun navidrome-play-random ()
+(defun listen-subsonic-play-random ()
   "Fetch a list of random songs and play the selected one."
   (interactive)
-  (let* ((response (navidrome--api-call "getRandomSongs" '(("size" . "3"))))
+  (let* ((response (listen-subsonic--api-call "getRandomSongs" '(("size" . "3"))))
          (songs (cdr (assoc 'song (cdr (assoc 'randomSongs response)))))
          (song-alist (mapcar (lambda (s)
                                  (cons (format "%s - %s"
@@ -188,7 +166,7 @@ PARAMS is an alist of additional parameters."
                                      nil t))
          (chosen-song (cdr (assoc-string selection song-alist t))))
     (when chosen-song
-      (navidrome--play-stream (cdr (assoc 'id chosen-song))))))
+      (listen-subsonic--play-stream (cdr (assoc 'id chosen-song))))))
 
 ;; FIXME: Seems to add all tracks, not just starred...
 (defun listen-queue-add-starred-from-subsonic (queue)
@@ -197,7 +175,7 @@ PARAMS is an alist of additional parameters."
                 (progn
                   (require 'listen-queue)
                   (listen-queue-complete :allow-new-p t))))
-  (let ((tracks (navidrome-get-starred-tracks)))
+  (let ((tracks (listen-subsonic-get-starred-tracks)))
     (if tracks
         (progn
           (listen-queue-add-tracks tracks queue)
@@ -215,7 +193,7 @@ PARAMS is an alist of additional parameters."
            (progn
              (require 'listen-queue)
              (listen-queue-complete :allow-new-p t)))))
-  (let* ((tracks (navidrome-search-tracks query))
+  (let* ((tracks (listen-subsonic-search-tracks query))
          (candidates (mapcar
                       (lambda (track)
                         (cons (format "%s - %s (%s)"
@@ -249,10 +227,10 @@ PARAMS is an alist of additional parameters."
   (let ((tracks-fn
          (pcase source
            ("Starred"
-            (lambda () (navidrome-get-starred-tracks)))
+            (lambda () (listen-subsonic-get-starred-tracks)))
            ("Search"
             (let ((query (read-string "Search: ")))
-              (lambda () (navidrome-search-tracks query)))))))
+              (lambda () (listen-subsonic-search-tracks query)))))))
     (listen-library tracks-fn
                     :name (format "Subsonic: %s" source))))
 
