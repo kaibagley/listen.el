@@ -81,8 +81,7 @@ parameters."
      :duration (or (alist-get 'duration s) 0)
      :date (alist-get 'year s)
      :rating (alist-get 'userRating s)
-     ;; TODO: Pass all tags we can get to metadata
-     :metadata '((source . "navidrome"))
+     :metadata s
      :etc `((source . "navidrome")
             (id . ,id)))))
 
@@ -136,7 +135,6 @@ PARAMS is an alist of additional parameters."
       (message "Successfully pinged Navidrome server!")
     (message "Failed to ping server.")))
 
-;; TODO: Make this actually work
 (defun listen-subsonic-queue-random (n queue)
   "Fetch and queue a list of N random songs."
   (interactive
