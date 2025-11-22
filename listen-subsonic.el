@@ -4,6 +4,7 @@
 (require 'url)
 (require 'json)
 (require 'auth-source)
+(require 'listen-queue)
 
 (defgroup listen-subsonic nil
   "Navidrome/Subsonic options."
@@ -36,13 +37,14 @@ e.g., \"https://music.example.com\""
 
 ;; TODO: Maybe allow insecure http later?
 (defun listen-subsonic--build-url (endpoint params)
-  "Build a URL from FQDN and PARAMS, to be used as an API call to
+  "Build a URL from ENDPOINT and PARAMS, to be used as an API call to
 Subsonic."
-  (let* ((base-url (concat "https://" listen-subsonic-url "/rest/" endpoint ".view"))
-         (full-params (mapcar (lambda (p)
-                                (list (car p) (url-hexify-string (cdr p))))
-                              params)))
-    (concat base-url "?" (url-build-query-string full-params nil t))))
+  (let* ((param-list (mapcar (lambda (p)
+                               (list (car p) (url-hexify-string (cdr p))))
+                             params))
+         (param-str (url-build-query-string param-list nil t)))
+    (format "https://%s/rest/%s.view?%s"
+            listen-subsonic-url endpoint param-str)))
 
 (defun listen-subsonic--get-auth-params ()
   "Return auth info alist for API calls."
@@ -58,10 +60,6 @@ Subsonic."
       ("c" . "listen.el")
       ("f" . "json"))))
 
-(defun listen-subsonic--get-base-url (endpoint)
-  "Return the full URL pointing to the Subsonic API at ENDPOINT."
-  (concat "https://" listen-subsonic-url "/rest/" endpoint ".view"))
-
 (defun listen-subsonic--get-stream-url (id)
   "Return a URL for MPV to stream from directly.
 Includes token, salt, and username retrieved from `auth-source' as
@@ -71,60 +69,61 @@ parameters."
    (append (listen-subsonic--get-auth-params) `(("id" . ,id)))))
 
 (defun listen-subsonic--json-to-listen (s)
-  "Convert JSON alist into a listen.el `listen-track' structure."
-  (let ((id (cdr (assoc 'id s))))
+  "Convert JSON alist S into a `listen-track' structure."
+  (let ((id (alist-get 'id s)))
     (make-listen-track
      :filename (listen-subsonic--get-stream-url id) ; silly mpv
-     :artist (cdr (assoc 'artist s))
-     :title (cdr (assoc 'title s))
-     :album (cdr (assoc 'album s))
-     :number (number-to-string (or (cdr (assoc 'track s)) 0))
-     :genre (cdr (assoc 'genre s))
-     :duration (or (cdr (assoc 'duration s)) 0)
-     :date (cdr (assoc 'year s))
-     :rating (cdr (assoc 'userRating s))
-     ;; every tag should get dumped into the metadata (i think)
+     :artist (alist-get 'artist s)
+     :title (alist-get 'title s)
+     :album (alist-get 'album s)
+     :number (number-to-string (or (alist-get 'track s) 0))
+     :genre (alist-get 'genre s)
+     :duration (or (alist-get 'duration s) 0)
+     :date (alist-get 'year s)
+     :rating (alist-get 'userRating s)
+     ;; TODO: Pass all tags we can get to metadata
      :metadata '((source . "navidrome"))
      :etc `((source . "navidrome")
             (id . ,id)))))
 
-(defun listen-subsonic-search-tracks (query)
-  "Search Navidrome and return a list of `listen-track' objects."
-  (let* ((response (listen-subsonic--api-call "search3" `(("query" . ,query) ("songCount" . "50"))))
-         (search-result (cdr (assoc 'searchResult3 response)))
-         (songs (cdr (assoc 'song search-result))))
+(defun listen-subsonic--get-tracks (endpoint key &optional params)
+  "Fetch tracks from ENDPOINT.
+PARAMS are optional API parameters."
+  (let* ((response (listen-subsonic--api-call endpoint params))
+         (data (alist-get key response))
+         (songs (alist-get 'song data)))
     (mapcar #'listen-subsonic--json-to-listen songs)))
+
+(defun listen-subsonic-search-tracks (query)
+  "Return a list of `listen-track' objects."
+  (listen-subsonic--get-tracks "search3" 'searchResult3
+                               `(("query" . ,query) ("songCount" . "50"))))
 
 (defun listen-subsonic-get-starred-tracks ()
   "Fetch all starred songs from Navidrome."
-  (let* ((response (listen-subsonic--api-call "getStarred"))
-         (starred-result (cdr (assoc 'starred response)))
-         (songs (cdr (assoc 'song starred-result))))
-    (mapcar #'listen-subsonic--json-to-listen songs)))
+  (listen-subsonic--get-tracks "getStarred" 'starred))
 
 (defun listen-subsonic--api-call (endpoint &optional params)
   "Make a call to the Subsonic API and return the parsed JSON.
 ENDPOINT is the API method, e.g., \"ping\" or \"getAlbumList2\".
 PARAMS is an alist of additional parameters."
   (unless listen-subsonic-url
-    (error "Please set `listen-subsonic-url' first"))
+    (error "Please set `listen-subsonic-url'."))
   (let* ((api-params (append (listen-subsonic--get-auth-params) params))
-         (api-url (listen-subsonic--build-url endpoint api-params))
-         (url-request-method "GET")
-         (url-request-extra-headers '(("Content-Type" . "application/json"))))
+         (api-url (listen-subsonic--build-url endpoint api-params)))
     ;; Maybe make this asynchronous using `url-retrieve' with callback instead?
     (with-current-buffer (url-retrieve-synchronously api-url)
       (goto-char (point-min))
       (when (re-search-forward "\n\n" nil t)
-        (let* ((json-string (decode-coding-string
-                             (buffer-substring-no-properties (point) (point-max))
-                             'utf-8))
-               (json-data (json-read-from-string json-string))
-               (response (cdr (assoc 'subsonic-response json-data))))
-          (if (string-equal "ok" (cdr (assoc 'status response)))
+        (let* ((json-data (json-read-from-string
+                           (decode-coding-string
+                            (buffer-substring-no-properties (point) (point-max))
+                            'utf-8)))
+               (response (alist-get 'subsonic-response json-data)))
+          (if (string-equal "ok" (alist-get 'status response))
               response
             (error "Navidrome API Error: %s"
-                   (cdr (assoc 'message (cdr (assoc 'error response)))))))))))
+                   (alist-get 'message (alist-get 'error response)))))))))
 
 ;;;###
 ;;; User-Facing Interactive Functions
@@ -137,23 +136,23 @@ PARAMS is an alist of additional parameters."
       (message "Successfully pinged Navidrome server!")
     (message "Failed to ping server.")))
 
-(defun listen-subsonic-play-random ()
-  "Fetch a list of random songs and play the selected one."
-  (interactive)
-  (let* ((response (listen-subsonic--api-call "getRandomSongs" '(("size" . "3"))))
-         (songs (cdr (assoc 'song (cdr (assoc 'randomSongs response)))))
-         (song-alist (mapcar (lambda (s)
-                                 (cons (format "%s - %s"
-                                               (cdr (assoc 'artist s))
-                                               (cdr (assoc 'title s)))
-                                       s))
-                             songs))
-         (selection (completing-read "Play song: "
-                                     (mapcar #'car song-alist)
-                                     nil t))
-         (chosen-song (cdr (assoc-string selection song-alist t))))
-    (when chosen-song
-      (listen-subsonic--play-stream (cdr (assoc 'id chosen-song))))))
+;; TODO: Make this actually work
+(defun listen-subsonic-queue-random (n queue)
+  "Fetch and queue a list of N random songs."
+  (interactive
+   (list
+    (read-number "Number of songs: " 10)
+    (listen-queue-complete :allow-new-p t)))
+  (let* ((tracks (listen-subsonic--get-tracks
+                  "getRandomSongs"
+                  'randomSongs `(("size" . ,(number-to-string n))))))
+    (if tracks
+        (progn
+          (listen-queue-add-tracks tracks (listen-queue))
+          (message "Added %d random tracks to queue '%s'."
+                   (length tracks) (listen-queue-name queue))
+          (listen-queue queue))
+      (message "No tracks returned from server."))))
 
 ;; TODO: Decide if these should be here or in listen-queue.el
 (defun listen-queue-add-starred-from-subsonic (queue)
@@ -172,36 +171,34 @@ PARAMS is an alist of additional parameters."
       (message "No starred songs found."))))
 
 ;; TODO: C-u adds to start of queue/next?
+;; TODO; Use annotate-function to make this (and other functions) look better
 (defun listen-queue-add-from-subsonic (query queue)
   "Search Navidrome for QUERY and add results to the current queue."
   (interactive
-   (let ((query (read-string "Search Navidrome: ")))
-     (list query
-           (progn
-             (require 'listen-queue)
-             (listen-queue-complete :allow-new-p t)))))
+   (list
+    (read-string "Search Navidrome: ")
+    (listen-queue-complete :allow-new-p t)))
   (let* ((tracks (listen-subsonic-search-tracks query))
-         (candidates (mapcar
-                      (lambda (track)
-                        (cons (format "%s - %s (%s)"
-                                      (listen-track-artist track)
-                                      (listen-track-title track)
-                                      (listen-track-album track))
-                              track))
-                      tracks))
+         (candidates (mapcar (lambda (track)
+                               (cons (format "%s - %s (%s)"
+                                             (listen-track-artist track)
+                                             (listen-track-title track)
+                                             (listen-track-album track))
+                                     track))
+                             tracks))
          (selected-names (if tracks
                              (completing-read-multiple "Select tracks (CRM): "
                                                        candidates
                                                        nil t)
                            nil))
-         (selected-tracks (mapcar
-                           (lambda (name) (cdr (assoc name candidates)))
-                           selected-names)))
+         (selected-tracks (mapcar (lambda (name)
+                                    (alist-get name candidates nil nil #'equal))
+                                  selected-names)))
     (if selected-tracks
         (progn
           (listen-queue-add-tracks selected-tracks queue)
           (message "Added %d tracks from Navidrome to queue '%s'."
-                   (length tracks)
+                   (length selected-tracks)
                    (listen-queue-name queue))
           (listen-queue queue))
       (message "No tracks found or added to '%s'" query))))
