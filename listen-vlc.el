@@ -19,7 +19,7 @@
 
 ;;; Commentary:
 
-;; 
+;;
 
 ;;; Code:
 
@@ -82,8 +82,11 @@
 (cl-defmethod listen--play ((player listen-player-vlc) file)
   "Play FILE with PLAYER.
 Stops playing, clears playlist, adds FILE, and plays it."
-  (dolist (command `("stop" "clear" ,(format "add %s" file) "play"))
-    (listen--send player command)))
+  (let ((path (if (string-prefix-p "http" file)
+                  file
+                (expand-file-name file))))
+    (dolist (command `("stop" "clear" ,(format "add %s" path) "play"))
+      (listen--send player command))))
 
 ;; (cl-defmethod listen--stop ((player listen-player-vlc))
 ;;   "Stop playing with PLAYER."
@@ -133,14 +136,14 @@ Stops playing, clears playlist, adds FILE, and plays it."
 VOLUME is an integer percentage."
   ;; While it is unclear from VLC's documentation, and even its source code at some revisions,
   ;; testing shows that the "rc" interface handles volume on a scale of 256 steps, where 255 = 100%
-  ;; (and values >255 are >100%).  See <https://code.videolan.org/videolan/vlc/-/issues/25143> and
+  ;; (and values >255 are >100%). See <https://code.videolan.org/videolan/vlc/-/issues/25143> and
   ;; <https://code.videolan.org/videolan/vlc/-/commits/80b8c8254cb2fddd59d31ba3a46a6640d7ef23da>.
   (pcase-let (((cl-struct listen-player max-volume) player))
     (if volume
         (progn
           (unless (<= 0 volume max-volume)
             (error "VOLUME must be 0-%s" max-volume))
-          (listen--send player (format "volume %s" (* 255 (/ volume 100.0)))))
+          (listen--send player (format "volume %s" (round (* 255 (/ volume 100.0))))))
       (* 100 (/ (string-to-number (listen--send player "volume")) 255.0)))))
 
 (provide 'listen-vlc)
