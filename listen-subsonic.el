@@ -30,7 +30,7 @@ e.g., \"https://music.example.com\""
       (car auth))))
 
 (defun navidrome--random-string (length)
-  ""
+  "Generates a random string, for use as a token in a Subsonic request."
   (let* ((letters "abcdefghijklmnopqrstuvwxyz")
          (let-len (length letters))
          (rand-list (make-list length 0)))
@@ -39,7 +39,8 @@ e.g., \"https://music.example.com\""
     (concat rand-list)))
 
 (defun navidrome--build-url (base-url params)
-  ""
+  "Build a URL from BASE-URL and PARAMS, to be used as an API call to
+Subsonic."
   (if (null params)
       base-url
     (concat base-url
