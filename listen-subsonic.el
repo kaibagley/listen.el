@@ -26,7 +26,7 @@ e.g., \"https://music.example.com\""
       (car auth))))
 
 (defun listen-subsonic--random-string (length)
-  "Generates a random string, for use as a token in a Subsonic request."
+  "Generates a random string, for use as a token in a Subsonic API request."
   (let* ((letters "abcdefghijklmnopqrstuvwxyz")
          (let-len (length letters))
          (rand-list (make-list length 0)))
@@ -34,20 +34,15 @@ e.g., \"https://music.example.com\""
           (mapcar (lambda (_) (aref letters (random let-len))) rand-list))
     (concat rand-list)))
 
-(defun listen-subsonic--build-url (base-url params)
-  "Build a URL from BASE-URL and PARAMS, to be used as an API call to
+;; TODO: Maybe allow insecure http later?
+(defun listen-subsonic--build-url (endpoint params)
+  "Build a URL from FQDN and PARAMS, to be used as an API call to
 Subsonic."
-  (if (null params)
-      base-url
-    (concat base-url
-            "?"
-            (mapconcat
-             (lambda (param)
-               (concat (url-hexify-string (car param))
-                       "="
-                       (url-hexify-string (cdr param))))
-             params
-             "&"))))
+  (let* ((base-url (concat "https://" listen-subsonic-url "/rest/" endpoint ".view"))
+         (full-params (mapcar (lambda (p)
+                                (list (car p) (url-hexify-string (cdr p))))
+                              params)))
+    (concat base-url "?" (url-build-query-string full-params nil t))))
 
 (defun listen-subsonic--get-auth-params ()
   "Return auth info alist for API calls."
@@ -63,11 +58,17 @@ Subsonic."
       ("c" . "listen.el")
       ("f" . "json"))))
 
+(defun listen-subsonic--get-base-url (endpoint)
+  "Return the full URL pointing to the Subsonic API at ENDPOINT."
+  (concat "https://" listen-subsonic-url "/rest/" endpoint ".view"))
+
 (defun listen-subsonic--get-stream-url (id)
-  "Return a signed url for MPV to play directly."
-  (let ((params (append (listen-subsonic--get-auth-params) `(("id" . ,id))))
-        (base (concat "https://" listen-subsonic-url "/rest/stream.view")))
-    (listen-subsonic--build-url base params)))
+  "Return a URL for MPV to stream from directly.
+Includes token, salt, and username retrieved from `auth-source' as
+parameters."
+  (listen-subsonic--build-url
+   "stream"
+   (append (listen-subsonic--get-auth-params) `(("id" . ,id)))))
 
 (defun listen-subsonic--json-to-listen (s)
   "Convert JSON alist into a listen.el `listen-track' structure."
@@ -107,27 +108,12 @@ ENDPOINT is the API method, e.g., \"ping\" or \"getAlbumList2\".
 PARAMS is an alist of additional parameters."
   (unless listen-subsonic-url
     (error "Please set `listen-subsonic-url' first"))
-  (let* ((creds (listen-subsonic--get-credentials))
-         (user (plist-get creds :user))
-         (pass (funcall (plist-get creds :secret)))
-         (salt (listen-subsonic--random-string 6))
-         (token (md5 (concat pass salt)))
-         (api-params (append `(("u" . ,user)
-                               ("t" . ,token)
-                               ("s" . ,salt)
-                               ("v" . "1.16.1")
-                               ("c" . "listen.el")
-                               ("f" . "json"))
-                             params))
-         (api-url (concat "https://"
-                          listen-subsonic-url
-                          "/rest/"
-                          endpoint
-                          ".view"))
+  (let* ((api-params (append (listen-subsonic--get-auth-params) params))
+         (api-url (listen-subsonic--build-url endpoint api-params))
          (url-request-method "GET")
-         (url-request-extra-headers `(("Content-Type" . "application/json")))
-         (full-url (listen-subsonic--build-url api-url api-params)))
-    (with-current-buffer (url-retrieve-synchronously full-url)
+         (url-request-extra-headers '(("Content-Type" . "application/json"))))
+    ;; Maybe make this asynchronous using `url-retrieve' with callback instead?
+    (with-current-buffer (url-retrieve-synchronously api-url)
       (goto-char (point-min))
       (when (re-search-forward "\n\n" nil t)
         (let* ((json-string (decode-coding-string
@@ -137,7 +123,8 @@ PARAMS is an alist of additional parameters."
                (response (cdr (assoc 'subsonic-response json-data))))
           (if (string-equal "ok" (cdr (assoc 'status response)))
               response
-            (error "Navidrome API Error: %s" (cdr (assoc 'message (cdr (assoc 'error response)))))))))))
+            (error "Navidrome API Error: %s"
+                   (cdr (assoc 'message (cdr (assoc 'error response)))))))))))
 
 ;;;###
 ;;; User-Facing Interactive Functions
@@ -168,7 +155,7 @@ PARAMS is an alist of additional parameters."
     (when chosen-song
       (listen-subsonic--play-stream (cdr (assoc 'id chosen-song))))))
 
-;; FIXME: Seems to add all tracks, not just starred...
+;; TODO: Decide if these should be here or in listen-queue.el
 (defun listen-queue-add-starred-from-subsonic (queue)
   "Add all starred songs from Navidrome to QUEUE."
   (interactive (list
