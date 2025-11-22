@@ -501,27 +501,21 @@ Completes files with `listen-complete-files', which see."
   queue)
 
 (defun listen-queue-track-id-key (track)
-  "Generate unique strink key for TRACK."
+  "Generate unique string key for TRACK."
   (or (map-elt (listen-track-etc track) 'id)
       (expand-file-name (listen-track-filename track))))
 
 (defun listen-queue-add-tracks (tracks queue)
   "Add TRACKS to QUEUE.
-Duplicate tracks are detected using a hash table.
-The queue's buffer is updated, if any."
-  (let ((seen (make-hash-table :test 'equal))
-        (to-add nil))
-    (dolist (track (listen-queue-tracks queue))
-      (puthash (listen-queue-track-id-key track) t seen))
-    (dolist (track tracks)
-      (let ((key (listen-queue-track-id-key track)))
-        (unless (gethash key seen)
-          (puthash key t seen)
-          (push track to-add))))
-    (when to-add
-      (cl-callf append (listen-queue-tracks queue) (nreverse to-add))
-      (listen-queue--update-buffer queue)))
-  queue)
+Duplicate tracks (by filename) are removed from the queue, and
+the queue's buffer is updated, if any."
+  (cl-callf append (listen-queue-tracks queue) tracks)
+  ;; TODO: Consider updating the metadata of any duplicate tracks.
+  (setf (listen-queue-tracks queue)
+        (cl-delete-duplicates (listen-queue-tracks queue)
+                              :key #'listen-queue-track-id-key
+                              :test #'equal))
+  (listen-queue--update-buffer queue))
 
 (cl-defun listen-queue-add-from-playlist-file (filename queue)
   "Add tracks to QUEUE selected from playlist at FILENAME.
