@@ -407,7 +407,9 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
    ;; TODO: Doesn't display current song properly after listen-next with :transient t
    (lambda ()
      (if listen-player
-         (concat "Listening: " (listen-mode-lighter))
+         (concat "Listening: "
+                 (let ((listen-lighter-title-max-length 79))
+                   (listen-mode-lighter)))
        "Not listening"))
    ;; Getting this layout to work required a lot of trial-and-error.
    [("Q" "Quit" listen-quit
