@@ -94,7 +94,9 @@ PARAMS are optional API parameters."
     (mapcar #'listen-subsonic--json-to-listen songs)))
 
 (defun listen-subsonic-search-tracks (query)
-  "Return a list of `listen-track' objects."
+  "Return a list of `listen-track' objects.
+Uses the Subsonic API's \"search3\" endpoint with QUERY as the search query.
+The maximum returned tracks is 50."
   (listen-subsonic--get-tracks "search3" 'searchResult3
                                `(("query" . ,query) ("songCount" . "50"))))
 
