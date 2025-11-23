@@ -156,11 +156,20 @@ return a list of values; otherwise return the sole value."
   "Return SECONDS formatted as an hour:minute:second-style duration."
   (format-seconds "%h:%z%m:%.2s" seconds))
 
+;; TODO: Decide if it matters that we can't compare Subsonic and local files here
+(defun listen-track-equal-p (track1 track2)
+  "Return non-nil if TRACK1 and TRACK2 are the same track."
+  (equal (or (alist-get 'id (listen-track-etc track1))
+             (expand-file-name (listen-track-filename track1)))
+         (or (alist-get 'id (listen-track-etc track2))
+             (expand-file-name (listen-track-filename track2)))))
+
 (define-hash-table-test
  'listen-track-equal
- #'equal
+ #'listen-track-equal-p
  (lambda (track)
-   (sxhash-equal (expand-file-name (listen-track-filename track)))))
+   (sxhash-equal (or (alist-get 'id (listen-track-etc track))
+                     (expand-file-name (listen-track-filename track))))))
 
 (cl-defun listen-delete-dups (list &optional (test 'listen-track-equal))
   "Return LIST having destructively removed duplicates.
