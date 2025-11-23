@@ -130,6 +130,12 @@ Called with one argument, the player (if the player has a queue,
 its current track will be the one that just finished playing)."
   :type 'hook)
 
+(defcustom listen-track-start-functions '()
+  "Functions called when a track starts playing.
+Called with one argument, the player (if the player has a queue,
+its current track will be the one that just started playing)."
+  :type 'hook)
+
 (defcustom listen-show-video t
   "Allow the player to show a window for video if applicable.
 Intended to be toggled from `listen-menu'."

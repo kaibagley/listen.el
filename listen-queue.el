@@ -371,7 +371,8 @@ select track as well."
                   (listen-queue--vtable-update-object (vtable-current-table)
                                                       previous-track previous-track))
                 (listen-queue--vtable-update-object (vtable-current-table) track track)))
-            (listen-queue--highlight-current))))))
+            (listen-queue--highlight-current)))))
+    (run-hook-with-args 'listen-track-start-functions player))
   (unless listen-mode
     (listen-mode))
   queue)

@@ -1,6 +1,6 @@
 ;;; listen-subsonic.el                    -*- lexical-binding: t; -*-
 
-;; TODO: Look at using plz.el for http requests
+;; TODO: Add a star and unstar function
 (require 'url)
 (require 'json)
 (require 'auth-source)
@@ -103,6 +103,33 @@ The maximum returned tracks is 50."
 (defun listen-subsonic-get-starred-tracks ()
   "Fetch all starred songs from Navidrome."
   (listen-subsonic--get-tracks "getStarred" 'starred))
+
+(defun listen-subsonic--scrobble (player submission-p)
+  "Scrobble the current track playing in PLAYER's queue to the Subsonic API.
+Is prepended to `listen-track-end-functions'."
+  (when-let* ((queue (map-elt (listen-player-etc player) :queue))
+              (track (listen-queue-current queue))
+              (id (alist-get 'id (listen-track-etc track)))
+              ((equal "navidrome" (alist-get 'source (listen-track-etc track)))))
+    (let* ((params `(("id". ,id)
+                     ("submission" . ,(if submission-p "true" "false"))))
+           (api-params (append (listen-subsonic--get-auth-params) params))
+           (url (listen-subsonic--build-url "scrobble" api-params)))
+      (url-retrieve url
+                    (lambda (status)
+                      (when (plist-get status :error)
+                        (message "Scrobble error %s" status)))
+                    nil t))))
+
+(defun listen-subsonic-track-now-playing (player)
+  "Notifies the Subsonic server that we have started playing a track.
+Is added to `listen-track-start-functions'."
+  (listen-subsonic--scrobble player nil))
+
+(defun listen-subsonic-track-finished (player)
+  "Notifies the Subsonic server that we have finished a track.
+Is added to `listen-track-end-functions'."
+  (listen-subsonic--scrobble player t))
 
 (defun listen-subsonic--api-call (endpoint &optional params)
   "Make a call to the Subsonic API and return the parsed JSON.
