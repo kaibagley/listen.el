@@ -82,11 +82,8 @@
 (cl-defmethod listen--play ((player listen-player-vlc) file)
   "Play FILE with PLAYER.
 Stops playing, clears playlist, adds FILE, and plays it."
-  (let ((path (if (string-prefix-p "http" file)
-                  file
-                (expand-file-name file))))
-    (dolist (command `("stop" "clear" ,(format "add %s" path) "play"))
-      (listen--send player command))))
+    (dolist (command `("stop" "clear" ,(format "add %s" file) "play"))
+      (listen--send player command)))
 
 ;; (cl-defmethod listen--stop ((player listen-player-vlc))
 ;;   "Stop playing with PLAYER."
