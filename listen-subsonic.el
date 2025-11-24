@@ -76,7 +76,8 @@ parameters."
 
 (defun listen-subsonic--json-to-listen (s)
  "Convert JSON alist S into a `listen-track' structure."
-  (let ((id (alist-get 'id s)))
+ (let ((id (alist-get 'id s))
+       (rating (alist-get 'userRating s)))
     (make-listen-track
      :filename (listen-subsonic--get-stream-url id) ; silly mpv
      :artist (alist-get 'artist s)
@@ -86,7 +87,8 @@ parameters."
      :genre (alist-get 'genre s)
      :duration (or (alist-get 'duration s) 0)
      :date (alist-get 'year s)
-     :rating (number-to-string (/ (or (alist-get 'userRating s) -5) 5.0))
+     ;; Rating is a string, "0.0" - "1.0". Subsonic returns 0-5 or nil
+     :rating (when rating (format "%f" (/ rating 5.0)))
      :metadata s
      :etc `((source . "navidrome")
             (id . ,id)
