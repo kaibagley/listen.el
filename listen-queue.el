@@ -175,8 +175,8 @@ Useful for when `save-excursion' does not preserve point."
                                    (listen-format-seconds duration))))
                  (list :name "r/5"
                        :getter (lambda (track _table)
-                                 (if-let ((rating (map-elt (listen-track-etc track) "fmps_rating"))
-                                          ((not (equal "-1" rating))))
+                                 (if-let ((rating (listen-track-rating track))
+                                          ((not (equal "-1.0" rating))))
                                      (progn
                                        (setf rating (number-to-string (* 5 (string-to-number rating))))
                                        (propertize rating 'face 'listen-rating))

@@ -327,6 +327,7 @@ According to `listen-lighter-format', which see."
                  ;; Don't update the position unless we're at least 10 seconds in.  This gives us a
                  ;; grace period in which to try to set the position to one from last time.
                  ;; TODO: Make this configurable.
+                 ;; FIXME: Sometimes returns nil, so errors.
                  (> (listen--elapsed listen-player) 10))
         (setf (map-elt (listen-track-etc current-track) 'position)
               (listen--elapsed listen-player)))

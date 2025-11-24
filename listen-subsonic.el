@@ -1,6 +1,7 @@
 ;;; listen-subsonic.el                    -*- lexical-binding: t; -*-
 
-;; TODO: Add a star and unstar function
+;; TODO: Add listen-subsonic-queue-from-playlist
+;; TODO: Some kind of indicator to show if track is starred or not
 (require 'url)
 (require 'json)
 (require 'auth-source)
@@ -14,6 +15,11 @@
   "The base URL of your Navidrome/Subsonic server.
 e.g., \"https://music.example.com\""
   :type 'string
+  :group 'listen-subsonic)
+
+(defface listen-starred
+  '((t :inherit font-lock-warning-face :foreground))
+  "Face for starred Subsonic tracks."
   :group 'listen-subsonic)
 
 ;;;###
@@ -69,7 +75,7 @@ parameters."
    (append (listen-subsonic--get-auth-params) `(("id" . ,id)))))
 
 (defun listen-subsonic--json-to-listen (s)
-  "Convert JSON alist S into a `listen-track' structure."
+ "Convert JSON alist S into a `listen-track' structure."
   (let ((id (alist-get 'id s)))
     (make-listen-track
      :filename (listen-subsonic--get-stream-url id) ; silly mpv
@@ -80,10 +86,11 @@ parameters."
      :genre (alist-get 'genre s)
      :duration (or (alist-get 'duration s) 0)
      :date (alist-get 'year s)
-     :rating (alist-get 'userRating s)
+     :rating (number-to-string (/ (or (alist-get 'userRating s) -5) 5.0))
      :metadata s
      :etc `((source . "navidrome")
-            (id . ,id)))))
+            (id . ,id)
+            (starred . ,(if (alist-get 'starred s) t nil))))))
 
 (defun listen-subsonic--get-tracks (endpoint key &optional params)
   "Fetch tracks from ENDPOINT.
@@ -104,15 +111,17 @@ The maximum returned tracks is 50."
   "Fetch all starred songs from Navidrome."
   (listen-subsonic--get-tracks "getStarred" 'starred))
 
-(defun listen-subsonic-star-track (star-p track)
-  "Send a request to the \"star\" or \"unstar\" Subsonic endpoints.
-Star (when STAR-P is non-nil) or unstar TRACK."
-  (when-let* ((id (alist-get 'id (listen-track-etc track))))
-    (listen-subsonic--api-call (if star-p "star" "unstar")
-                               `(("id" . ,id))
-                               (lambda (_)
-                                 (message "%s '%s'" (if star-p "Starred" "Unstarred")
-                                          (listen-track-title track))))))
+;; (defun listen-subsonic-star-track (star-p track)
+;;   "Send a request to the \"star\" or \"unstar\" Subsonic endpoints.
+;; Star (when STAR-P is non-nil) or unstar TRACK.
+;; When called interactively, the star-state of the song will be toggled."
+;;   (interactive (list ))
+;;   (when-let* ((id (alist-get 'id (listen-track-etc track))))
+;;     (listen-subsonic--api-call (if star-p "star" "unstar")
+;;                                `(("id" . ,id))
+;;                                (lambda (_)
+;;                                  (message "%s '%s'" (if star-p "Starred" "Unstarred")
+;;                                           (listen-track-title track))))))
 
 (defun listen-subsonic--scrobble (player submission-p)
   "Scrobble the current track playing in PLAYER's queue to the Subsonic API.
