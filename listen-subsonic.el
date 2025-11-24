@@ -104,54 +104,80 @@ The maximum returned tracks is 50."
   "Fetch all starred songs from Navidrome."
   (listen-subsonic--get-tracks "getStarred" 'starred))
 
+(defun listen-subsonic-star-track (star-p track)
+  "Send a request to the \"star\" or \"unstar\" Subsonic endpoints.
+Star (when STAR-P is non-nil) or unstar TRACK."
+  (when-let* ((id (alist-get 'id (listen-track-etc track))))
+    (listen-subsonic--api-call (if star-p "star" "unstar")
+                               `(("id" . ,id))
+                               (lambda (_)
+                                 (message "%s '%s'" (if star-p "Starred" "Unstarred")
+                                          (listen-track-title track))))))
+
 (defun listen-subsonic--scrobble (player submission-p)
   "Scrobble the current track playing in PLAYER's queue to the Subsonic API.
-Is prepended to `listen-track-end-functions'."
+When SUBMISSION-P is non-nil, server is notified that the currently playing track is finished.
+When SUBMISSION-P is nil, server is notified the current tracks is \"now playing\"."
   (when-let* ((queue (map-elt (listen-player-etc player) :queue))
               (track (listen-queue-current queue))
-              (id (alist-get 'id (listen-track-etc track)))
-              ((equal "navidrome" (alist-get 'source (listen-track-etc track)))))
+              (id (alist-get 'id (listen-track-etc track))))
     (let* ((params `(("id". ,id)
-                     ("submission" . ,(if submission-p "true" "false"))))
-           (api-params (append (listen-subsonic--get-auth-params) params))
-           (url (listen-subsonic--build-url "scrobble" api-params)))
-      (url-retrieve url
-                    (lambda (status)
-                      (when (plist-get status :error)
-                        (message "Scrobble error %s" status)))
-                    nil t))))
+                     ("submission" . ,(if submission-p "true" "false")))))
+      (listen-subsonic--api-call "scrobble" params #'ignore))))
 
 (defun listen-subsonic-track-now-playing (player)
   "Notifies the Subsonic server that we have started playing a track.
-Is added to `listen-track-start-functions'."
+Should be added to `listen-track-start-functions'."
   (listen-subsonic--scrobble player nil))
 
 (defun listen-subsonic-track-finished (player)
   "Notifies the Subsonic server that we have finished a track.
-Is added to `listen-track-end-functions'."
+Should be added to `listen-track-end-functions'."
   (listen-subsonic--scrobble player t))
 
-(defun listen-subsonic--api-call (endpoint &optional params)
-  "Make a call to the Subsonic API and return the parsed JSON.
-ENDPOINT is the API method, e.g., \"ping\" or \"getAlbumList2\".
-PARAMS is an alist of additional parameters."
+(defun listen-subsonic--process-api-response ()
+  "Parse JSON response from a Subsonic API request.
+Returns the response's data, or signals an error.
+Should be called from a buffer containing an API response."
+  (goto-char (point-min))
+  (if (not (re-search-forward "\n\n" nil t))
+      (error "Subsonic API response is empty")
+    (let* ((json-data (json-read-from-string
+                       (decode-coding-string
+                        (buffer-substring-no-properties (point) (point-max))
+                        'utf-8)))
+           (response (alist-get 'subsonic-response json-data)))
+      (if (string-equal "ok" (alist-get 'status response))
+          response
+        (error "Subsonic API response returned error: %s"
+               (alist-get 'message (alist-get 'error response)))))))
+
+(defun listen-subsonic--api-call (endpoint &optional params callback)
+  "Make a call to the Subsonic API.
+ENDPOINT is the API method defined by the Subsonic or OpenSubsonic API specifications.
+PARAMS is an alist of additional parameters.
+If CALLBACK is nil, run synchronously and return the parsed JSON.
+If CALLBACK is non-nil, run asynchronously and call CALLBACK with the data.
+This function handles error responses, CALLBACK should assume a successful API request."
   (unless listen-subsonic-url
-    (error "Please set `listen-subsonic-url'."))
+    (user-error "Please set `listen-subsonic-url'."))
   (let* ((api-params (append (listen-subsonic--get-auth-params) params))
          (api-url (listen-subsonic--build-url endpoint api-params)))
-    ;; Maybe make this asynchronous using `url-retrieve' with callback instead?
-    (with-current-buffer (url-retrieve-synchronously api-url)
-      (goto-char (point-min))
-      (when (re-search-forward "\n\n" nil t)
-        (let* ((json-data (json-read-from-string
-                           (decode-coding-string
-                            (buffer-substring-no-properties (point) (point-max))
-                            'utf-8)))
-               (response (alist-get 'subsonic-response json-data)))
-          (if (string-equal "ok" (alist-get 'status response))
-              response
-            (error "Navidrome API Error: %s"
-                   (alist-get 'message (alist-get 'error response)))))))))
+    (if callback
+        ;; Async request
+        (url-retrieve api-url
+                      (lambda (status)
+                        (let ((err (plist-get status :error)))
+                          (if err
+                              (message "Subsonic API call error: HTTP %s" err)
+                            (funcall callback (listen-subsonic--process-api-response))
+                            (kill-buffer (current-buffer)))) ; Creates a new buffer each time??
+                      nil t))
+      ;; Sync request
+      (let ((buf (url-retrieve-synchronously api-url)))
+        (unwind-protect
+            (with-current-buffer buf (listen-subsonic--process-api-response))
+          (kill-buffer buf))))))
 
 ;;;###
 ;;; User-Facing Interactive Functions
