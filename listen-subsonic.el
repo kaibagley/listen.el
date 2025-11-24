@@ -113,17 +113,20 @@ The maximum returned tracks is 50."
   "Fetch all starred songs from Navidrome."
   (listen-subsonic--get-tracks "getStarred" 'starred))
 
-;; (defun listen-subsonic-star-track (star-p track)
-;;   "Send a request to the \"star\" or \"unstar\" Subsonic endpoints.
-;; Star (when STAR-P is non-nil) or unstar TRACK.
-;; When called interactively, the star-state of the song will be toggled."
-;;   (interactive (list ))
-;;   (when-let* ((id (alist-get 'id (listen-track-etc track))))
-;;     (listen-subsonic--api-call (if star-p "star" "unstar")
-;;                                `(("id" . ,id))
-;;                                (lambda (_)
-;;                                  (message "%s '%s'" (if star-p "Starred" "Unstarred")
-;;                                           (listen-track-title track))))))
+(defun listen-subsonic-star-track (track star-p)
+  "Send a request to the \"star\" or \"unstar\" Subsonic endpoints.
+Star (when STAR-P is non-nil) or unstar TRACK.
+When called interactively, the star-state of the song will be toggled."
+  (interactive
+   (let ((track (listen-queue-complete-track (listen-queue-complete))))
+     (list track (not (alist-get 'starred (listen-track-etc track))))))
+  (when-let* ((id (alist-get 'id (listen-track-etc track))))
+    (listen-subsonic--api-call (if star-p "star" "unstar")
+                               `(("id" . ,id))
+                               (lambda (_)
+                                 (setf (alist-get 'starred (listen-track-etc track)) star-p)
+                                 (message "%s '%s'" (if star-p "Starred" "Unstarred")
+                                          (listen-track-title track))))))
 
 (defun listen-subsonic--scrobble (player submission-p)
   "Scrobble the current track playing in PLAYER's queue to the Subsonic API.
