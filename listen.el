@@ -92,12 +92,13 @@ happens, this option truncates before that format spec is applied
 and adds an ellipsis where it occurs."
   :type 'natnum)
 
-(defcustom listen-lighter-symbols-list '("🎵" "▶" "⏸")
+(defcustom listen-lighter-symbols-list '("🎵" "▶" "⏸" "■")
   "List of symbols to use in the `listen-mode-lighter'.
 Must contain 3 elements:
 1. Some musical symbol (defaults to 🎵)
 2. Play symbol (defaults to ▶)
-3. Pause symbol (defaults to ⏸)")
+3. Pause symbol (defaults to ⏸)
+4. Stop symbol (defaults to ■)")
 
 (defcustom listen-lighter-format "%m:%s %a: %t (%r)%E "
   "Format for mode line lighter.
