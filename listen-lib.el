@@ -141,9 +141,14 @@ return a list of values; otherwise return the sole value."
   "Return variable `listen-player' or a newly set one if nil."
   (defvar listen-backend)
   (or listen-player
-      (setf listen-player (pcase listen-show-video
-                            ('t (make-listen-player-vlc))
-                            ('nil (make-listen-player-vlc-audio-only))))))
+      (setf listen-player
+            ;; Very hacky fix
+            (cond ((and (eq listen-backend 'make-listen-player-vlc)
+                        (null listen-show-video))
+                   (make-listen-player-vlc-audio-only))
+                  (t
+                   ;; Use configured backend
+                   (funcall listen-backend))))))
 
 (cl-defun listen-current-track (&optional (player listen-player))
   "Return track playing on PLAYER, if any."
