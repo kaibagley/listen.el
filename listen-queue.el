@@ -443,6 +443,7 @@ which see."
     (push queue listen-queues)
     queue))
 
+;; TODO: Should this also kill the queue buffers?
 (defun listen-queue-discard (queue)
   "Discard QUEUE."
   (interactive (list (listen-queue-complete :prompt "Discard queue: ")))
@@ -821,6 +822,7 @@ tracks in the queue unchanged)."
                          (get 'number)
                          (get 'date)
                          (cons " " " "))
+                   ;; TODO: A way for Subsonic songs to show metadata here
                    (sort (listen-info--decode-info-fields (listen-track-filename track))
                          (lambda (a b)
                            (string< (car a) (car b))))))
