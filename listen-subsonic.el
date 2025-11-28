@@ -135,6 +135,7 @@ When SUBMISSION-P is non-nil, server is notified that the currently playing trac
 When SUBMISSION-P is nil, server is notified the current tracks is \"now playing\"."
   (when-let* ((queue (map-elt (listen-player-etc player) :queue))
               (track (listen-queue-current queue))
+              ((equal (map-elt (listen-track-etc track) 'source) "navidrome"))
               (id (alist-get 'id (listen-track-etc track))))
     (let* ((params `(("id". ,id)
                      ("submission" . ,(if submission-p "true" "false")))))
