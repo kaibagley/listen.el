@@ -74,24 +74,23 @@ parameters."
    (append (listen-subsonic--get-auth-params) `(("id" . ,id)))))
 
 (defun listen-subsonic--json-to-listen (s)
- "Convert JSON alist S into a `listen-track' structure."
- (let ((id (alist-get 'id s))
-       (rating (alist-get 'userRating s)))
+  "Convert JSON alist S into a `listen-track' structure."
+  (map-let (('id id) ('userRating rating) artist title album track genre duration year starred) s
     (make-listen-track
      :filename (listen-subsonic--get-stream-url id) ; silly mpv
-     :artist (alist-get 'artist s)
-     :title (alist-get 'title s)
-     :album (alist-get 'album s)
-     :number (number-to-string (or (alist-get 'track s) 0))
-     :genre (alist-get 'genre s)
-     :duration (or (alist-get 'duration s) 0)
-     :date (alist-get 'year s)
+     :artist artist
+     :title title
+     :album album
+     :number (number-to-string (or track 0))
+     :genre genre
+     :duration (or duration 0)
+     :date year
      ;; Rating is a string, "0.0" - "1.0". Subsonic returns 0-5 or nil
      :rating (when rating (format "%f" (/ rating 5.0)))
      :metadata s
      :etc `((source . "navidrome")
             (id . ,id)
-            (starred . ,(if (alist-get 'starred s) t nil))))))
+            (starred . ,(if starred t nil))))))
 
 (defun listen-subsonic--get-tracks (endpoint key &optional params)
   "Fetch tracks from ENDPOINT.
