@@ -31,15 +31,6 @@ e.g., \"https://music.example.com\""
     (when auth
       (car auth))))
 
-(defun listen-subsonic--random-string (length)
-  "Generates a random string, for use as a token in a Subsonic API request."
-  (let* ((letters "abcdefghijklmnopqrstuvwxyz")
-         (let-len (length letters))
-         (rand-list (make-list length 0)))
-    (setq rand-list
-          (mapcar (lambda (_) (aref letters (random let-len))) rand-list))
-    (concat rand-list)))
-
 ;; TODO: Maybe allow insecure http later?
 (defun listen-subsonic--build-url (endpoint params)
   "Build a URL from ENDPOINT and PARAMS, to be used as an API call to
@@ -56,7 +47,7 @@ Subsonic."
   (let* ((creds (listen-subsonic--get-credentials))
          (user (plist-get creds :user))
          (pass (funcall (plist-get creds :secret)))
-         (salt (listen-subsonic--random-string 6))
+         (salt (format "%06x" (random #xffffff)))
          (token (md5 (concat pass salt))))
     `(("u" . ,user)
       ("t" . ,token)
@@ -184,17 +175,17 @@ This function handles error responses, CALLBACK should assume a successful API r
         ;; Async request
         (url-retrieve api-url
                       (lambda (status)
-                        (let ((err (plist-get status :error)))
-                          (if err
-                              (message "Subsonic API call error: HTTP %s" err)
-                            (funcall callback (listen-subsonic--process-api-response))
-                            (kill-buffer (current-buffer)))) ; Creates a new buffer each time??
-                      nil t))
-      ;; Sync request
-      (let ((buf (url-retrieve-synchronously api-url)))
-        (unwind-protect
-            (with-current-buffer buf (listen-subsonic--process-api-response))
-          (kill-buffer buf))))))
+                        (unwind-protect
+                            (unless (plist-get status :error)
+                              (funcall callback (listen-subsonic--process-api-response)))
+                          ;; Creates a new buffer each time??
+                          (kill-buffer (current-buffer)))
+                        nil t))
+    ;; Sync request
+    (let ((buf (url-retrieve-synchronously api-url)))
+      (unwind-protect
+          (with-current-buffer buf (listen-subsonic--process-api-response))
+        (kill-buffer buf))))))
 
 ;;;###
 ;;; User-Facing Interactive Functions
