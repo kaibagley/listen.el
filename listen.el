@@ -445,8 +445,6 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
           listen-player)
     :description
     (lambda ()
-      ;; (if listen-player
-      ;;     (format "Volume: %3.0f%%" (or (listen--volume listen-player) 0))
       (if-let ((listen-player)
                (volume (listen--volume listen-player)))
           (format "Volume: %.0f%%" volume)

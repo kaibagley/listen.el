@@ -153,15 +153,15 @@
              (listen-player-playback-started-from player) 0)
        (listen--update-metadata player)
        (listen-mpv--update-property
-        player (lambda (msg)
-                 (setf (listen-player-duration player)
-                       (map-elt msg 'data)))
-        "duration")
+        player "duration"
+        :then (lambda (msg)
+                (setf (listen-player-duration player)
+                      (map-elt msg 'data))))
        (listen-mpv--update-property
-        player (lambda (msg)
-                 (setf (listen-player-volume player)
-                       (map-elt msg 'data)))
-        "volume"))
+        player "volume"
+        :then (lambda (msg)
+                (setf (listen-player-volume player)
+                      (map-elt msg 'data)))))
       ((or "end-file" "idle") (listen--status-is player 'stopped))
       ((or 'nil "data")
        (if-let ((callback (map-elt (map-elt (listen-player-etc player) :requests) request_id)))
@@ -284,16 +284,19 @@ VOLUME is an integer percentage."
         (progn
           (unless (<= 0 volume max-volume)
             (error "VOLUME must be 0-%s" max-volume))
-          (let ((new-volume (listen-mpv--set-property player "volume" volume)))
-            ;; We assume that the command will work, and we set the volume that is being set,
-            ;; because the Transient description uses the value from the player slot, and the
-            ;; callback can't make the Transient update itself.
-            (setf (listen-player-volume player) new-volume)))
-      (listen-player-volume player))))
+          (listen-mpv--set-property player "volume" volume)
+          ;; (let ((new-volume (listen-mpv--set-property player "volume" volume)))
+          ;;   ;; We assume that the command will work, and we set the volume that is being set,
+          ;;   ;; because the Transient description uses the value from the player slot, and the
+          ;;   ;; callback can't make the Transient update itself.
+          (setf (listen-player-volume player) volume)))
+    (listen-player-volume player)))
 
 (cl-defmethod listen-mpv--update-property ((player listen-player-mpv) property &key then)
-  (let ((request-id (listen--send* player "get_property" property)))
-    (setf (map-elt (map-elt (listen-player-etc player) :requests) request-id) callback)))
+  "Update PROPERTY on PLAYER, calling THEN with the result as its argument."
+  (listen-mpv--get-property player property :then then))
+  ;; (let ((request-id (listen--send* player "get_property" property)))
+  ;;   (setf (map-elt (map-elt (listen-player-etc player) :requests) request-id) callback)))
 
 (cl-defmethod listen-mpv--get-property ((player listen-player-mpv) property &key then)
   (listen--send* player `("get_property" ,property) :then then))
