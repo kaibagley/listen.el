@@ -165,8 +165,8 @@ Interactively, uses the default player."
 (defun listen-next (player)
   "Play next track in PLAYER's queue.
 Interactively, uses the default player."
-  (declare-function listen-queue-next "listen-queue")
   (interactive (list (listen-current-player)))
+  (declare-function listen-queue-next "listen-queue")
   (listen-queue-next (map-elt (listen-player-etc player) :queue)))
 
 (defun listen-pause (player)
@@ -267,19 +267,20 @@ Interactively, jump to current queue's current track."
 (defun listen-mode-lighter ()
   "Return lighter for `listen-mode'.
 According to `listen-lighter-format', which see."
-  (when-let ((listen-player)
-             ((listen--running-p listen-player))
-             ((listen--playing-p listen-player))
-             (info (listen--info listen-player)))
+  (when-let* ((player listen-player)
+              ((listen--running-p player))
+              ((pcase (listen-player-status player)
+                 ((or 'playing 'paused) t)))
+              (metadata (listen-player-metadata player)))
     (format-spec listen-lighter-format
                  `((?a . ,(lambda ()
-                            (propertize (or (alist-get "artist" info nil nil #'equal) "")
+                            (propertize (or (alist-get 'artist metadata nil nil #'equal) "")
                                         'face 'listen-lighter-artist)))
                    (?A . ,(lambda ()
-                            (propertize (or (alist-get "album" info nil nil #'equal) "")
+                            (propertize (or (alist-get 'album metadata nil nil #'equal) "")
                                         'face 'listen-lighter-album)))
                    (?t . ,(lambda ()
-                            (if-let ((title (alist-get "title" info nil nil #'equal)))
+                            (if-let ((title (alist-get 'title metadata nil nil #'equal)))
                                 (propertize
                                  (truncate-string-to-width title listen-lighter-title-max-length
                                                            nil nil t)
@@ -334,15 +335,13 @@ According to `listen-lighter-format', which see."
       (unless (or playingp
                   ;; HACK: It seems that sometimes the player gets restarted
                   ;; even when paused: this extra check should prevent that.
-                  (member (listen--status listen-player) '("playing" "paused")))
+                  (member (listen--status listen-player) '(playing paused)))
         (setf playing-next-p
               (run-hook-with-args 'listen-track-end-functions listen-player))))
     (setf listen-mode-lighter
           (when (and listen-player (listen--running-p listen-player))
             (listen-mode-lighter)))
-    (when playing-next-p
-      ;; TODO: Remove this (I think it's not necessary anymore).
-      (force-mode-line-update 'all))))
+    (force-mode-line-update 'all)))
 
 ;; TODO: (at least) with Navidrome, there is a gap between playback currently, and thus the lighter
 ;; will vanish and reappear in between songs.
@@ -446,8 +445,11 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
           listen-player)
     :description
     (lambda ()
-      (if listen-player
-          (format "Volume: %3.0f%%" (or (listen--volume listen-player) 0))
+      ;; (if listen-player
+      ;;     (format "Volume: %3.0f%%" (or (listen--volume listen-player) 0))
+      (if-let ((listen-player)
+               (volume (listen--volume listen-player)))
+          (format "Volume: %.0f%%" volume)
         "Volume: N/A"))
     ("=" "Set" listen-volume)
     ("v" "Down" (lambda ()
