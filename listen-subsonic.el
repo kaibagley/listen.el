@@ -3,7 +3,6 @@
 ;; TODO: Add listen-subsonic-queue-from-playlist
 ;; TODO: Some kind of indicator to show if track is starred or not
 (require 'url)
-(require 'json)
 (require 'auth-source)
 (require 'listen-queue)
 
@@ -102,6 +101,9 @@ PARAMS are optional API parameters."
          (songs (alist-get 'song data)))
     (mapcar #'listen-subsonic--json-to-listen songs)))
 
+;; TODO: This blocks emacs while waiting for response
+;; Look into consult's async features at some
+;; stage? Maybe not necessary but will allow searching way more than 50
 (defun listen-subsonic-search-tracks (query)
   "Return a list of `listen-track' objects.
 Uses the Subsonic API's \"search3\" endpoint with QUERY as the search query.
