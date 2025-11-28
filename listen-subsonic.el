@@ -156,15 +156,16 @@ Should be called from a buffer containing an API response."
   (goto-char (point-min))
   (if (not (re-search-forward "\n\n" nil t))
       (error "Subsonic API response is empty")
-    (let* ((json-data (json-read-from-string
-                       (decode-coding-string
-                        (buffer-substring-no-properties (point) (point-max))
-                        'utf-8)))
-           (response (alist-get 'subsonic-response json-data)))
-      (if (string-equal "ok" (alist-get 'status response))
-          response
-        (error "Subsonic API response returned error: %s"
-               (alist-get 'message (alist-get 'error response)))))))
+    (let ((json-data))
+      (decode-coding-region (point) (point-max) 'utf-8)
+      (setq json-data (json-parse-buffer :object-type 'alist
+                                         :null-object nil
+                                         :false-object nil))
+      (let ((response (alist-get 'subsonic-response json-data)))
+        (if (string-equal "ok" (alist-get 'status response))
+            response
+          (error "Subsonic API response returned error: %s"
+                 (alist-get 'message (alist-get 'error response))))))))
 
 (defun listen-subsonic--api-call (endpoint &optional params callback)
   "Make a call to the Subsonic API.
