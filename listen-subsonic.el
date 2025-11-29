@@ -83,13 +83,37 @@ parameters."
             (id . ,id)
             (starred . ,(if starred t nil))))))
 
-(defun listen-subsonic--get-tracks (endpoint key &optional params)
-  "Fetch tracks from ENDPOINT.
-PARAMS are optional API parameters."
+(defun listen-subsonic--get-tracks (endpoint rootkey itemkey &optional params)
+"Return tracks from Subsonic ENDPOINT.
+Returned alist is the contents of ROOTKEY, then ITEMKEY of the API
+response. PARAMS are optional API parameters.
+
+The parsed API response consists of an alist which is mostly metadata
+and a data structure labelled ROOTKEY. This data is another alist with
+metadata about the request data, and the interesting part of the
+request labelled ITEMKEY."
   (let* ((response (listen-subsonic--api-call endpoint params))
-         (data (alist-get key response))
-         (songs (alist-get 'song data)))
-    (mapcar #'listen-subsonic--json-to-listen songs)))
+         (data (alist-get rootkey response))
+         (tracks (alist-get itemkey data)))
+    (mapcar #'listen-subsonic--json-to-listen tracks)))
+
+(defun listen-subsonic--get-browse (endpoint rootkey itemkey)
+  "Return an alist from Subsonic ENDPOINT as (name . id).
+The \"browse\" API endpoints have similarly structured responses.
+Returned alist is the contents of ROOTKEY, then ITEMKEY of the
+API response.
+
+The parsed API response consists of an alist which is mostly metadata
+and a data structure labelled ROOTKEY. This data is another alist with
+metadata about the request data, and the interesting part of the
+request labelled ITEMKEY."
+  (let* ((response (listen-subsonic--api-call endpoint))
+         (data (alist-get rootkey response))
+         (items (alist-get itemkey data)))
+    (mapcar (lambda (item)
+              (cons (alist-get 'name item)
+                    (format "%s" (alist-get 'id item)))) ; This must be a string
+            items)))
 
 ;; TODO: This blocks emacs while waiting for response
 ;; Look into consult's async features at some
@@ -98,12 +122,12 @@ PARAMS are optional API parameters."
   "Return a list of `listen-track' objects.
 Uses the Subsonic API's \"search3\" endpoint with QUERY as the search query.
 The maximum returned tracks is 50."
-  (listen-subsonic--get-tracks "search3" 'searchResult3
+  (listen-subsonic--get-tracks "search3" 'searchResult3 'song
                                `(("query" . ,query) ("songCount" . "50"))))
 
 (defun listen-subsonic-get-starred-tracks ()
   "Fetch all starred songs from Navidrome."
-  (listen-subsonic--get-tracks "getStarred" 'starred))
+  (listen-subsonic--get-tracks "getStarred" 'starred 'song))
 
 (defun listen-subsonic-star-track (track star-p)
   "Send a request to the \"star\" or \"unstar\" Subsonic endpoints.
@@ -206,7 +230,8 @@ This function handles error responses, CALLBACK should assume a successful API r
     (listen-queue-complete :allow-new-p t)))
   (let* ((tracks (listen-subsonic--get-tracks
                   "getRandomSongs"
-                  'randomSongs `(("size" . ,(number-to-string n))))))
+                  'randomSongs 'song
+                  `(("size" . ,(number-to-string n))))))
     (if tracks
         (progn
           (listen-queue-add-tracks tracks (listen-queue))
@@ -264,18 +289,38 @@ This function handles error responses, CALLBACK should assume a successful API r
           (listen-queue queue))
       (message "No tracks found or added to '%s'" query))))
 
+(defun listen-subsonic--get-playlists ()
+  (listen-subsonic--get-browse "getPlaylists" 'playlists 'playlist))
+(defun listen-subsonic--get-playlist-tracks (playlist)
+  (listen-subsonic--get-tracks "getPlaylist"
+                               'playlist 'entry
+                               `(("id" . ,playlist))))
+
+;; TODO: a browsing option where the user can drill down from
+;; folder > artist > album > song, and at any point select the current level
+
 (defun listen-library-from-subsonic (source)
   "Show a library view for subsonic."
   (interactive
    (list (completing-read "Source: "
-                          '("Starred" "Search") nil t)))
+                          '("Starred Tracks"
+                            "Playlist"
+                            "Search")
+                          nil t)))
   (let ((tracks-fn
          (pcase source
-           ("Starred"
+           ("Starred Tracks"
             (lambda () (listen-subsonic-get-starred-tracks)))
+           ("Playlist"
+            (lambda ()
+              (let* ((playlists (listen-subsonic--get-playlists))
+                     (name (completing-read "Playlist: " playlists nil t))
+                     (id (alist-get name playlists nil nil #'equal)))
+                (listen-subsonic--get-playlist-tracks id))))
            ("Search"
-            (let ((query (read-string "Search: ")))
-              (lambda () (listen-subsonic-search-tracks query)))))))
+            (lambda ()
+              (let ((query (read-string "Search: ")))
+                (listen-subsonic-search-tracks query)))))))
     (listen-library tracks-fn
                     :name (format "Subsonic: %s" source))))
 
