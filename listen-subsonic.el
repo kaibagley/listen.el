@@ -27,7 +27,7 @@
 
 ;; TODO: Add listen-subsonic-queue-from-playlist
 ;; TODO: Some kind of indicator to show if track is starred or not
-(require 'url)
+(require 'plz)
 (require 'auth-source)
 (require 'listen-queue)
 
@@ -196,45 +196,32 @@ Should be added to `listen-track-end-functions'."
 Returns the response's data, or signals an error.
 Should be called from a buffer containing an API response."
   (goto-char (point-min))
-  (if (not (re-search-forward "\n\n" nil t))
+  (if (zerop (buffer-size))
       (error "Subsonic API response is empty")
-    (let ((json-data))
-      (decode-coding-region (point) (point-max) 'utf-8)
-      (setq json-data (json-parse-buffer :object-type 'alist
+    (let* ((json-data (json-parse-buffer :object-type 'alist
                                          :null-object nil
                                          :false-object nil))
-      (let ((response (alist-get 'subsonic-response json-data)))
-        (if (string-equal "ok" (alist-get 'status response))
-            response
-          (error "Subsonic API response returned error: %s"
-                 (alist-get 'message (alist-get 'error response))))))))
+           (response (alist-get 'subsonic-response json-data)))
+      (if (string-equal "ok" (alist-get 'status response))
+          response
+        (error "Subsonic API response returned error: %s"
+               (alist-get 'message (alist-get 'error response))))))))
 
 (defun listen-subsonic--api-call (endpoint &optional params callback)
   "Make a call to the Subsonic API.
 ENDPOINT is the API method defined by the Subsonic or OpenSubsonic API specifications.
 PARAMS is an alist of additional parameters.
 If CALLBACK is nil, run synchronously and return the parsed JSON.
-If CALLBACK is non-nil, run asynchronously and call CALLBACK with the data.
-This function handles error responses, CALLBACK should assume a successful API request."
+If CALLBACK is non-nil, run asynchronously and call CALLBACK with the data."
   (unless listen-subsonic-url
     (user-error "Please set `listen-subsonic-url'."))
   (let* ((api-params (append (listen-subsonic--get-auth-params) params))
-         (api-url (listen-subsonic--build-url endpoint api-params)))
-    (if callback
-        ;; Async request
-        (url-retrieve api-url
-                      (lambda (status)
-                        (unwind-protect
-                            (unless (plist-get status :error)
-                              (funcall callback (listen-subsonic--process-api-response)))
-                          ;; Creates a new buffer each time??
-                          (kill-buffer (current-buffer)))
-                        nil t))
-    ;; Sync request
-    (let ((buf (url-retrieve-synchronously api-url)))
-      (unwind-protect
-          (with-current-buffer buf (listen-subsonic--process-api-response))
-        (kill-buffer buf))))))
+         (api-url (listen-subsonic--build-url endpoint api-params))
+         (api-headers '(("Accept-Encoding" . "gzip"))))
+      (plz 'get api-url
+        :headers api-headers
+        :as #'listen-subsonic--process-api-response
+        :then (or callback 'sync))))
 
 ;;;###
 ;;; User-Facing Interactive Functions
