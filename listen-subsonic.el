@@ -1,4 +1,29 @@
-;;; listen-subsonic.el                    -*- lexical-binding: t; -*-
+;;; listen-subsonic.el --- Subsonic server support for listen.el         -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2025  Free Software Foundation, Inc.
+
+;; Author: Kai Bagley <kaibagley@proton.mail>
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+;;; Commentary:
+
+;;
+
+;;; Code:
+
+;;;; Requirements
 
 ;; TODO: Add listen-subsonic-queue-from-playlist
 ;; TODO: Some kind of indicator to show if track is starred or not
@@ -321,6 +346,7 @@ This function handles error responses, CALLBACK should assume a successful API r
             (lambda ()
               (let ((query (read-string "Search: ")))
                 (listen-subsonic-search-tracks query)))))))
+    (declare-function listen-library "listen-library")
     (listen-library tracks-fn
                     :name (format "Subsonic: %s" source))))
 
