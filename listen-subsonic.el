@@ -32,6 +32,7 @@
 (require 'listen-queue) ; Add tracks to queue
 
 (require 'map)          ; for map-let and map-elt
+(require 'url-util)     ; for url-build-query-string
 
 ;; Declares
 (declare-function listen-library "listen-library")
@@ -205,12 +206,12 @@ When SUBMISSION-P is nil, server is notified the current tracks is \"now playing
                      ("submission" . ,(if submission-p "true" "false")))))
       (listen-subsonic--api-call "scrobble" params #'ignore))))
 
-(defun listen-subsonic-track-now-playing (player)
+(defun listen-subsonic-scrobble-start (player)
   "Notifies the Subsonic server that we have started playing a track.
 Should be added to `listen-track-start-functions'."
   (listen-subsonic--scrobble player nil))
 
-(defun listen-subsonic-track-finished (player)
+(defun listen-subsonic-scrobble-end (player)
   "Notifies the Subsonic server that we have finished a track.
 Should be added to `listen-track-end-functions'."
   (listen-subsonic--scrobble player t))
@@ -271,14 +272,14 @@ If CALLBACK is non-nil, run asynchronously and call CALLBACK with the data."
                   `(("size" . ,(number-to-string n))))))
     (if tracks
         (progn
-          (listen-queue-add-tracks tracks (listen-queue))
+          (listen-queue-add-tracks tracks queue)
           (message "Added %d random tracks to queue '%s'."
                    (length tracks) (listen-queue-name queue))
           (listen-queue queue))
       (message "No tracks returned from server."))))
 
 ;; TODO: Decide if these should be here or in listen-queue.el
-(defun listen-queue-add-starred-from-subsonic (queue)
+(defun listen-subsonic-queue-starred-tracks (queue)
   "Add all starred songs from Navidrome to QUEUE."
   (interactive (list
                 (progn
@@ -295,7 +296,7 @@ If CALLBACK is non-nil, run asynchronously and call CALLBACK with the data."
 
 ;; TODO: C-u adds to start of queue/next?
 ;; TODO; Use annotate-function to make this (and other functions) look better
-(defun listen-queue-add-from-subsonic (query queue)
+(defun listen-subsonic-queue-search-tracks (query queue)
   "Search Navidrome for QUERY and add results to the current queue."
   (interactive
    (list
