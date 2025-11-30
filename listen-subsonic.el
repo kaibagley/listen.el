@@ -46,6 +46,17 @@ e.g., \"music.example.com\""
   :type 'string
   :group 'listen-subsonic)
 
+(defcustom listen-subsonic-search-max-results "50"
+  "Maximum results to return in search queries.
+Must be a string."
+  :type 'string
+  :group 'listen-subsonic)
+
+(defcustom listen-subsonic-user-agent "listen.el"
+  "User-agent used in API requests."
+  :type 'string
+  :group 'listen-subsonic)
+
 (defface listen-starred
   '((t :inherit font-lock-warning-face))
   "Face for starred Subsonic tracks."
@@ -88,7 +99,7 @@ Subsonic."
           ("t" . ,token)
           ("s" . ,salt)
           ("v" . "1.16.1")
-          ("c" . "listen.el")
+          ("c" . ,listen-subsonic-user-agent)
           ("f" . "json")))))
 
 (defun listen-subsonic--get-stream-url (id)
@@ -161,7 +172,7 @@ request labelled ITEMKEY."
 Uses the Subsonic API's \"search3\" endpoint with QUERY as the search query.
 The maximum returned tracks is 50."
   (listen-subsonic--get-tracks "search3" 'searchResult3 'song
-                               `(("query" . ,query) ("songCount" . "50"))))
+                               `(("query" . ,query) ("songCount" . ,listen-subsonic-search-max-results))))
 
 (defun listen-subsonic-get-starred-tracks ()
   "Fetch all starred songs from Navidrome."
