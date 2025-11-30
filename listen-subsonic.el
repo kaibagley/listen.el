@@ -27,9 +27,11 @@
 
 ;; TODO: Add listen-subsonic-queue-from-playlist
 ;; TODO: Some kind of indicator to show if track is starred or not
-(require 'plz)
-(require 'auth-source)
-(require 'listen-queue)
+(require 'plz)          ; HTTP requests
+(require 'auth-source)  ; authinfo
+(require 'listen-queue) ; Add tracks to queue
+
+(require 'map)          ; for map-let and map-elt
 
 ;; Declares
 (declare-function listen-library "listen-library")
