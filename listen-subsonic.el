@@ -35,7 +35,15 @@
 (require 'url-util)     ; for url-build-query-string
 
 ;; Declares
+
 (declare-function listen-library "listen-library")
+
+;;;; Variables
+
+(defvar listen-subsonic--auth-cache nil
+  "Cache for auth parameters to avoid recomputation.")
+
+;;;; Customisation
 
 (defgroup listen-subsonic nil
   "Navidrome/Subsonic options."
@@ -63,30 +71,13 @@ Must be a string."
   "Face for starred Subsonic tracks."
   :group 'listen-subsonic)
 
-;; Vars
-(defvar listen-subsonic--auth-cache nil
-  "Cache for auth parameters to avoid recomputation.")
-
-;;;###
-;;; Internal Helper Functions
-;;;###
+;;;; Auth helpers
 
 (defun listen-subsonic--get-credentials ()
   "Fetch user credentials securely from `auth-source`."
   (let ((auth (auth-source-search :host listen-subsonic-url)))
     (when auth
       (car auth))))
-
-;; TODO: Maybe allow insecure http later?
-(defun listen-subsonic--build-url (endpoint params)
-  "Build a URL from ENDPOINT and PARAMS, to be used as an API call to
-Subsonic."
-  (let* ((param-list (mapcar (lambda (p)
-                               (list (car p) (cdr p)))
-                             params))
-         (param-str (url-build-query-string param-list nil t)))
-    (format "https://%s/rest/%s.view?%s"
-            listen-subsonic-url endpoint param-str)))
 
 (defun listen-subsonic--get-auth-params ()
   "Return auth info alist for API calls."
@@ -102,6 +93,19 @@ Subsonic."
           ("v" . "1.16.1")
           ("c" . ,listen-subsonic-user-agent)
           ("f" . "json")))))
+
+;; TODO: Maybe allow insecure http later?
+(defun listen-subsonic--build-url (endpoint params)
+  "Build a URL from ENDPOINT and PARAMS, to be used as an API call to
+Subsonic."
+  (let* ((param-list (mapcar (lambda (p)
+                               (list (car p) (cdr p)))
+                             params))
+         (param-str (url-build-query-string param-list nil t)))
+    (format "https://%s/rest/%s.view?%s"
+            listen-subsonic-url endpoint param-str)))
+
+;;;; API Helpers
 
 (defun listen-subsonic--get-stream-url (id)
   "Return a URL for MPV to stream from directly.
@@ -129,6 +133,40 @@ parameters."
      :etc `((source . "navidrome")
             (id . ,id)
             (starred . ,(if starred t nil))))))
+
+(defun listen-subsonic--process-api-response ()
+  "Parse JSON response from a Subsonic API request.
+Returns the response's data, or signals an error.
+Should be called from a buffer containing an API response."
+  (goto-char (point-min))
+  (if (zerop (buffer-size))
+      (error "Subsonic API response is empty")
+    (let* ((json-data (json-parse-buffer :object-type 'alist
+                                         :null-object nil
+                                         :false-object nil))
+           (response (alist-get 'subsonic-response json-data)))
+      (if (string-equal "ok" (alist-get 'status response))
+          response
+        (error "Subsonic API response returned error: %s"
+               (alist-get 'message (alist-get 'error response)))))))
+
+(defun listen-subsonic--api-call (endpoint &optional params callback)
+  "Make a call to the Subsonic API.
+ENDPOINT is the API method defined by the Subsonic or OpenSubsonic API specifications.
+PARAMS is an alist of additional parameters.
+If CALLBACK is nil, run synchronously and return the parsed JSON.
+If CALLBACK is non-nil, run asynchronously and call CALLBACK with the data."
+  (unless listen-subsonic-url
+    (user-error "Please set `listen-subsonic-url'."))
+  (let* ((api-params (append (listen-subsonic--get-auth-params) params))
+         (api-url (listen-subsonic--build-url endpoint api-params))
+         (api-headers '(("Accept-Encoding" . "gzip"))))
+    (plz 'get api-url
+      :headers api-headers
+      :as #'listen-subsonic--process-api-response
+      :then (or callback 'sync))))
+
+;;;; Read requests
 
 (defun listen-subsonic--get-tracks (endpoint rootkey itemkey &optional params)
   "Return tracks from Subsonic ENDPOINT.
@@ -179,6 +217,8 @@ The maximum returned tracks is 50."
   "Fetch all starred songs from Navidrome."
   (listen-subsonic--get-tracks "getStarred" 'starred 'song))
 
+;;;; Write requests
+
 (defun listen-subsonic-star-track (track star-p)
   "Send a request to the \"star\" or \"unstar\" Subsonic endpoints.
 Star (when STAR-P is non-nil) or unstar TRACK.
@@ -216,42 +256,7 @@ Should be added to `listen-track-start-functions'."
 Should be added to `listen-track-end-functions'."
   (listen-subsonic--scrobble player t))
 
-(defun listen-subsonic--process-api-response ()
-  "Parse JSON response from a Subsonic API request.
-Returns the response's data, or signals an error.
-Should be called from a buffer containing an API response."
-  (goto-char (point-min))
-  (if (zerop (buffer-size))
-      (error "Subsonic API response is empty")
-
-    (let* ((json-data (json-parse-buffer :object-type 'alist
-                                         :null-object nil
-                                         :false-object nil))
-           (response (alist-get 'subsonic-response json-data)))
-      (if (string-equal "ok" (alist-get 'status response))
-          response
-        (error "Subsonic API response returned error: %s"
-               (alist-get 'message (alist-get 'error response)))))))
-
-(defun listen-subsonic--api-call (endpoint &optional params callback)
-  "Make a call to the Subsonic API.
-ENDPOINT is the API method defined by the Subsonic or OpenSubsonic API specifications.
-PARAMS is an alist of additional parameters.
-If CALLBACK is nil, run synchronously and return the parsed JSON.
-If CALLBACK is non-nil, run asynchronously and call CALLBACK with the data."
-  (unless listen-subsonic-url
-    (user-error "Please set `listen-subsonic-url'."))
-  (let* ((api-params (append (listen-subsonic--get-auth-params) params))
-         (api-url (listen-subsonic--build-url endpoint api-params))
-         (api-headers '(("Accept-Encoding" . "gzip"))))
-    (plz 'get api-url
-      :headers api-headers
-      :as #'listen-subsonic--process-api-response
-      :then (or callback 'sync))))
-
-;;;###
-;;; User-Facing Interactive Functions
-;;;###
+;;;; Interactive functions
 
 (defun listen-subsonic-ping-server ()
   "Ping the server to check connectivity and authentication."
@@ -432,7 +437,8 @@ Select the \"[All]\" option to select all tracks under the current level."
   "Show a library view for subsonic."
   (interactive
    (list (completing-read "Source: "
-                          '("Starred Tracks"
+                          '("Browse"
+                            "Starred Tracks"
                             "Playlist"
                             "Search")
                           nil t)))
@@ -440,6 +446,8 @@ Select the \"[All]\" option to select all tracks under the current level."
          (pcase source
            ("Starred Tracks"
             (lambda () (listen-subsonic-get-starred-tracks)))
+           ("Browse"
+            (lambda () (listen-subsonic-browse-library)))
            ("Playlist"
             (lambda ()
               (let* ((playlists (listen-subsonic--get-playlists))
