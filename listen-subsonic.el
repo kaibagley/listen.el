@@ -25,7 +25,6 @@
 
 ;;;; Requirements
 
-;; TODO: Add listen-subsonic-queue-from-playlist
 ;; TODO: Some kind of indicator to show if track is starred or not
 (require 'plz)          ; HTTP requests
 (require 'auth-source)  ; authinfo
@@ -217,6 +216,16 @@ The maximum returned tracks is 50."
   "Fetch all starred songs from Navidrome."
   (listen-subsonic--get-tracks "getStarred" 'starred 'song))
 
+(defun listen-subsonic--get-playlists ()
+  "Return a list of all playlists accessible to the user."
+  (listen-subsonic--get-browse "getPlaylists" 'playlists 'playlist))
+
+(defun listen-subsonic--get-playlist-tracks (playlist)
+  "Return all tracks in PLAYLIST."
+  (listen-subsonic--get-tracks "getPlaylist"
+                               'playlist 'entry
+                               `(("id" . ,playlist))))
+
 ;;;; Write requests
 
 (defun listen-subsonic-star-track (track star-p)
@@ -283,13 +292,23 @@ Should be added to `listen-track-end-functions'."
           (listen-queue queue))
       (message "No tracks returned from server."))))
 
-;; TODO: Decide if these should be here or in listen-queue.el
+(defun listen-subsonic-queue-playlist (queue)
+  "Add all tracks from a user's playlist to the QUEUE."
+  (interactive (list (listen-queue-complete :allow-new-p t)))
+  (let* ((playlists (listen-subsonic--get-playlists))
+         (name (completing-read "Playlist: " playlists nil t))
+         (id (alist-get name playlists nil nil #'equal))
+         (tracks (listen-subsonic--get-playlist-tracks id)))
+    (if tracks
+        (progn
+          (listen-queue-add-tracks tracks queue)
+          (message "Added %d tracks to queue '%s'."
+                   (length tracks) (listen-queue-name queue)))
+      (message "No tracks found."))))
+
 (defun listen-subsonic-queue-starred-tracks (queue)
   "Add all starred songs from Navidrome to QUEUE."
-  (interactive (list
-                (progn
-                  (require 'listen-queue)
-                  (listen-queue-complete :allow-new-p t))))
+  (interactive (list (listen-queue-complete :allow-new-p t)))
   (let ((tracks (listen-subsonic-get-starred-tracks)))
     (if tracks
         (progn
@@ -331,13 +350,6 @@ Should be added to `listen-track-end-functions'."
                    (listen-queue-name queue))
           (listen-queue queue))
       (message "No tracks found or added to '%s'" query))))
-
-(defun listen-subsonic--get-playlists ()
-  (listen-subsonic--get-browse "getPlaylists" 'playlists 'playlist))
-(defun listen-subsonic--get-playlist-tracks (playlist)
-  (listen-subsonic--get-tracks "getPlaylist"
-                               'playlist 'entry
-                               `(("id" . ,playlist))))
 
 (defun listen-subsonic--get-all-tracks (id)
   "Fetch all tracks under directory ID recursively."
