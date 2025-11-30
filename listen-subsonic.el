@@ -45,11 +45,11 @@
 ;;;; Customisation
 
 (defgroup listen-subsonic nil
-  "Navidrome/Subsonic options."
+  "`listen' options for Subsonic."
   :group 'listen)
 
 (defcustom listen-subsonic-url ""
-  "The base URL of your Navidrome/Subsonic server.
+  "The base URL of your Subsonic-compatible server.
 e.g., \"music.example.com\""
   :type 'string
   :group 'listen-subsonic)
@@ -129,7 +129,7 @@ parameters."
      ;; Rating is a string, "0.0" - "1.0". Subsonic returns 0-5 or nil
      :rating (when rating (format "%f" (/ rating 5.0)))
      :metadata s
-     :etc `((source . "navidrome")
+     :etc `((source . "subsonic")
             (id . ,id)
             (starred . ,(if starred t nil))))))
 
@@ -168,7 +168,7 @@ If CALLBACK is non-nil, run asynchronously and call CALLBACK with the data."
 ;;;; Read requests
 
 (defun listen-subsonic--get-tracks (endpoint rootkey itemkey &optional params)
-  "Return tracks from Subsonic ENDPOINT.
+  "Return tracks from Subsonic REST ENDPOINT.
 Returned alist is the contents of ROOTKEY, then ITEMKEY of the API
 response. PARAMS are optional API parameters.
 
@@ -213,7 +213,7 @@ The maximum returned tracks is 50."
                                `(("query" . ,query) ("songCount" . ,listen-subsonic-search-max-results))))
 
 (defun listen-subsonic-get-starred-tracks ()
-  "Fetch all starred songs from Navidrome."
+  "Fetch all starred songs from Subsonic server."
   (listen-subsonic--get-tracks "getStarred" 'starred 'song))
 
 (defun listen-subsonic--get-playlists ()
@@ -249,7 +249,7 @@ When SUBMISSION-P is non-nil, server is notified that the currently playing trac
 When SUBMISSION-P is nil, server is notified the current tracks is \"now playing\"."
   (when-let* ((queue (map-elt (listen-player-etc player) :queue))
               (track (listen-queue-current queue))
-              (source (equal (map-elt (listen-track-etc track) 'source) "navidrome"))
+              (source (equal (map-elt (listen-track-etc track) 'source) "subsonic"))
               (id (alist-get 'id (listen-track-etc track))))
     (let* ((params `(("id". ,id)
                      ("submission" . ,(if submission-p "true" "false")))))
@@ -271,11 +271,11 @@ Should be added to `listen-track-end-functions'."
   "Ping the server to check connectivity and authentication."
   (interactive)
   (if (listen-subsonic--api-call "ping")
-      (message "Successfully pinged Navidrome server!")
+      (message "Successfully pinged Subsonic server!")
     (message "Failed to ping server.")))
 
 (defun listen-subsonic-queue-random (n queue)
-  "Fetch and queue a list of N random songs."
+  "Fetch and add to QUEUE a list of N random songs."
   (interactive
    (list
     (read-number "Number of songs: " 10)
@@ -292,6 +292,7 @@ Should be added to `listen-track-end-functions'."
           (listen-queue queue))
       (message "No tracks returned from server."))))
 
+;; TODO: Deduplicate logic between this and the library code below
 (defun listen-subsonic-queue-playlist (queue)
   "Add all tracks from a user's playlist to the QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
@@ -307,7 +308,7 @@ Should be added to `listen-track-end-functions'."
       (message "No tracks found."))))
 
 (defun listen-subsonic-queue-starred-tracks (queue)
-  "Add all starred songs from Navidrome to QUEUE."
+  "Add all starred songs from Subsonic server to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
   (let ((tracks (listen-subsonic-get-starred-tracks)))
     (if tracks
@@ -321,10 +322,10 @@ Should be added to `listen-track-end-functions'."
 ;; TODO: C-u adds to start of queue/next?
 ;; TODO; Use annotate-function to make this (and other functions) look better
 (defun listen-subsonic-queue-search-tracks (query queue)
-  "Search Navidrome for QUERY and add results to the current queue."
+  "Search Subsonic server for QUERY and add results to the current queue."
   (interactive
    (list
-    (read-string "Search Navidrome: ")
+    (read-string "Search Subsonic: ")
     (listen-queue-complete :allow-new-p t)))
   (let* ((tracks (listen-subsonic-search-tracks query))
          (candidates (mapcar (lambda (track)
@@ -345,7 +346,7 @@ Should be added to `listen-track-end-functions'."
     (if selected-tracks
         (progn
           (listen-queue-add-tracks selected-tracks queue)
-          (message "Added %d tracks from Navidrome to queue '%s'."
+          (message "Added %d tracks from Subsonic to queue '%s'."
                    (length selected-tracks)
                    (listen-queue-name queue))
           (listen-queue queue))
