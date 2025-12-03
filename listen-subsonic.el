@@ -373,7 +373,7 @@ Should be added to `listen-track-end-functions'."
                                  ("query" . "")
                                  ("songCount" . "100000"))))
 
-(defun listen-subsonic--browse-step (level id name)
+(defun listen-subsonic--browse-step (level id name &optional history)
   (let (prompt
         next
         candidates)
@@ -409,13 +409,24 @@ Should be added to `listen-track-end-functions'."
                                           s))
                                   children)))))
 
-    ;; Dont show "All" for libraries (dont be greedy)
-    (let* ((choices (if (eq level :libraries)
-                        candidates
-                      (cons (cons "[All]" :this) candidates)))
+    (let* ((choices (append
+                     ;; When theres history, add an up option
+                     (when history
+                       '((".." . :up)))
+                     ;; Dont show "All" for libraries (too much)
+                     (unless (eq level :libraries)
+                       (cons (cons "[All]" :this) nil))
+                     candidates))
            (sel-name (completing-read prompt (mapcar #'car choices) nil t))
            (selection (cdr (assoc sel-name choices))))
       (cond
+       ;; User selected ".."
+       ((eq selection :up)
+        (let ((prev (car history)))
+          (listen-subsonic--browse-step (nth 0 prev)
+                                        (nth 1 prev)
+                                        (nth 2 prev)
+                                        (cdr history)))) ; Latest history
        ;; User selected All
        ((eq selection :this)
         (list (lambda ()
@@ -428,10 +439,16 @@ Should be added to `listen-track-end-functions'."
               (format "Subsonic: %s" name)))
        ;; Descending a level
        ((or (stringp selection) (numberp selection))
-        (listen-subsonic--browse-step next (format "%s" selection) sel-name))
+        (listen-subsonic--browse-step next
+                                      (format "%s" selection)
+                                      sel-name
+                                      (cons (list level id name) history))) ; Add history
        ;; Selected a dir-like object
        ((and (listp selection) (alist-get 'isDir selection))
-        (listen-subsonic--browse-step next (alist-get 'id selection) sel-name))
+        (listen-subsonic--browse-step next
+                                      (alist-get 'id selection)
+                                      sel-name
+                                      (cons (list level id name) history))) ; Add history
        ;; Song/bottom level
        (t
         (list (lambda () (list (listen-subsonic--json-to-listen selection)))
