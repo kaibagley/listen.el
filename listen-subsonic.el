@@ -48,7 +48,7 @@
   "`listen' options for Subsonic."
   :group 'listen)
 
-(defcustom listen-subsonic-url ""
+(defcustom listen-subsonic-url nil
   "The base URL of your Subsonic-compatible server.
 e.g., \"music.example.com\""
   :type 'string

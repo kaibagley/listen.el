@@ -233,7 +233,8 @@ Stops playing, clears playlist, adds FILE, and plays it."
   (if (listen--playing-p player)
       (setf (map-elt (listen-player-etc player) :elapsed)
             (+ (time-to-seconds
-                (time-subtract (current-time) (listen-player-playback-started-at player)))
+                (time-subtract (current-time)
+                               (or (listen-player-playback-started-at player) 0)))
                (listen-player-playback-started-from player)))
     (map-elt (listen-player-etc player) :elapsed)))
 
