@@ -118,19 +118,19 @@ Subsonic."
 
 ;;;; API Helpers
 
-(defun listen-subsonic--get-stream-url (id)
+(defun listen-subsonic--get-stream-url (id &optional auth-params)
   "Return a URL for MPV to stream from directly.
-Includes token, salt, and username retrieved from `auth-source' as
-parameters."
+If AUTH-PARAMS is nil, new auth params are generated."
   (listen-subsonic--build-url
    "stream"
-   (append (listen-subsonic--get-auth-params) `(("id" . ,id)))))
+   (append (or auth-params (listen-subsonic--get-auth-params))
+           `(("id" . ,id)))))
 
-(defun listen-subsonic--json-to-listen (s)
+(defun listen-subsonic--json-to-listen (s &optional auth-params)
   "Convert JSON alist S into a `listen-track' structure."
   (map-let (('id id) ('userRating rating) artist title album track genre duration year starred) s
     (make-listen-track
-     :filename (listen-subsonic--get-stream-url id) ; silly mpv
+     :filename (listen-subsonic--get-stream-url id auth-params) ; silly mpv
      :artist artist
      :title title
      :album album
@@ -143,7 +143,7 @@ parameters."
      :metadata s
      :etc `((source . "subsonic")
             (id . ,id)
-            (starred . ,(if starred t nil))))))
+            (starred . ,(when starred t))))))
 
 (defun listen-subsonic--process-api-response ()
   "Parse JSON response from a Subsonic API request.
@@ -198,10 +198,11 @@ metadata about the request data, and the interesting part of the
 request labelled ITEMKEY."
   (let* ((response (listen-subsonic--api-call endpoint params))
          (data (alist-get rootkey response))
-         (tracks (alist-get itemkey data))
-         ;; Let bind cached auth params
-         (listen-subsonic--auth-cache (listen-subsonic--get-auth-params)))
-    (mapcar #'listen-subsonic--json-to-listen tracks)))
+         (tracks (alist-get itemkey data)))
+    (mapcar (lambda (track)
+              (listen-subsonic--json-to-listen track
+                                               (listen-subsonic--get-auth-params))
+            tracks)))
 
 (defun listen-subsonic--get-browse (endpoint rootkey itemkey)
   "Return an alist from Subsonic ENDPOINT as (name . id).
@@ -294,7 +295,7 @@ Should be added to `listen-track-end-functions'."
     (message "Failed to ping server.")))
 
 (defun listen-subsonic--queue-tracks (tracks queue)
-  "Add TRACKS to QUEUE."
+  "Add TRACKS to QUEUE with a message."
   (if tracks
       (progn
         (listen-queue-add-tracks tracks queue)
@@ -369,14 +370,13 @@ Should be added to `listen-track-end-functions'."
   "Fetch all tracks under directory ID recursively."
   (let* ((data (listen-subsonic--api-call "getMusicDirectory" `(("id" . ,id))))
          (parent (alist-get 'directory data))
-         (children (alist-get 'child parent))
-         ;; Let bind cached variables
-         (listen-subsonic--auth-cache (listen-subsonic--get-auth-params)))
+         (children (alist-get 'child parent)))
     (mapcan (lambda (c)
               (if (alist-get 'isDir c)
                   (listen-subsonic--get-all-tracks (alist-get 'id c))
-                (list (listen-subsonic--json-to-listen c))))
-            children)))
+                (list (listen-subsonic--json-to-listen c
+                                                       (listen-subsonic--get-auth-params)))))
+            children))))
 
 (defun listen-subsonic--get-folder-tracks (id)
   "Return all tracks in music folder ID."
@@ -415,7 +415,6 @@ Should be added to `listen-track-end-functions'."
          (candidates (mapcar (lambda (item) (cons (alist-get 'name item) item)) items))
          (next (listen-subsonic--browse-next-level level))
          (prompt (if (eq level :root) "Library: " (format "%s: " name))))
-
     (let* ((choices (append
                      ;; When theres history, add an up option
                      (when history
