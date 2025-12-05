@@ -586,6 +586,32 @@ Backend for `listen-subsonic-browse-library'. HISTORY contains the user's naviga
           (put-text-property pos (1+ pos) 'display image))))))
 
 ;; Render the "dired" buffer
+(defun listen-subsonic--browse-insert-item (item next)
+  "Insert a single ITEM with link to NEXT level into the listen browser buffer."
+  (let* ((dirp (alist-get 'isDir item))
+         (name (alist-get 'name item))
+         (prefix (listen-subsonic--browse-get-prefix item))
+         (pt (point))
+         (face (if dirp
+                   (pcase listen-subsonic--browse-current-level
+                     (:root 'listen-genre)
+                     (:indexes 'listen-artist)
+                     (t 'listen-album))
+                 'listen-track)))
+    (insert (propertize prefix 'face 'shadow))
+    (insert-text-button
+     (concat (if dirp "📁 " "🎵 ") name)
+     'action #'listen-subsonic--browse-button
+     'follow-link t
+     'subsonic-item item
+     'subsonic-next (if dirp next nil)
+     'face face)
+    (insert "\n")
+    ;; returns id and pos for art
+    (list (or (alist-get 'coverArt item) (alist-get 'id item))
+          (current-buffer)
+          (+ pt (length prefix)))))
+
 (defun listen-subsonic--browse-render (id name level)
   "Display a view for LEVEL (folder/artist/album) of ID and NAME."
   (setq-local listen-subsonic--browse-current-id id
@@ -614,32 +640,12 @@ Backend for `listen-subsonic-browse-library'. HISTORY contains the user's naviga
                           'follow-link t
                           'face 'dired-directory)
       (insert "\n"))
-    ;; add the actual items
-    (dolist (item items)
-      (let* ((dirp (alist-get 'isDir item))
-             (name (alist-get 'name item))
-             (art-id (or (alist-get 'coverArt item) (alist-get 'id item)))
-             (text (concat (if dirp "📁 " "🎵 ") name))
-             (prefix (listen-subsonic--browse-get-prefix item))
-             (pt (+ (point) (length prefix)))
-             (face (cond
-                    ((not dirp) 'listen-track)
-                    ((eq level :root) 'listen-genre)
-                    ((eq level :indexes) 'listen-artist)
-                    (t 'listen-album))))
-        (insert (propertize prefix 'face 'shadow))
-        (insert-text-button
-         text
-         'action #'listen-subsonic--browse-button
-         'follow-link t
-         'subsonic-item item
-         'subsonic-next (if dirp next nil)
-         'face face)
-        (insert "\n")
-        ;; async load cover art
-        (when (and art-id (not (or (eq level :root) (eq level :indexes))))
-          (listen-subsonic--browse-fetch-art art-id (current-buffer) pt))))
-    (goto-char (point-min))))
+    (let ((next (listen-subsonic--browse-next-level level)))
+      (dolist (item (listen-subsonic--get-nodes level id))
+        (pcase-let ((`(,art-id ,buf ,pos)
+                     (listen-subsonic--browse-insert-item item next)))
+          (when (and art-id (not (memq level '(:root :indexes))))
+            (listen-subsonic--browse-fetch-art art-id buf pos)))))))
 
 ;; browser functions
 
