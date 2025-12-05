@@ -70,6 +70,18 @@ Must be a string."
   "Face for starred Subsonic tracks."
   :group 'listen-subsonic)
 
+(defvar listen-subsonic-cache-dir (expand-file-name "listen.el" temporary-file-directory)
+  "Directory to store cached subsonic data.")
+
+(defvar listen-subsonic--art-queue nil
+  "Queue for art downloads in browser.")
+
+(defvar listen-subsonic--art-active 0
+  "Number of active downloads.")
+
+(defvar listen-subsonic--art-max 10
+  "Max concurrent downloads.")
+
 ;;;; Auth helpers
 
 (defun listen-subsonic--get-credentials ()
@@ -507,13 +519,6 @@ Select the \"[All]\" option to select all tracks under the current level."
   (when (file-exists-p listen-subsonic-cache-dir)
     (delete-directory listen-subsonic-cache-dir t))
   (message "Cleared Subsonic cache."))
-
-(defvar listen-subsonic--art-queue nil
-  "Queue for art downloads in browser.")
-(defvar listen-subsonic--art-active 0
-  "Number of active downloads.")
-(defvar listen-subsonic--art-max 10
-  "Max concurrent downloads.")
 
 (defun listen-subsonic--browse-next-level (level)
   "Return the next level under LEVEL."
