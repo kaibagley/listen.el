@@ -293,6 +293,16 @@ Should be added to `listen-track-end-functions'."
       (message "Successfully pinged Subsonic server!")
     (message "Failed to ping server.")))
 
+(defun listen-subsonic--queue-tracks (tracks queue)
+  "Add TRACKS to QUEUE."
+  (if tracks
+      (progn
+        (listen-queue-add-tracks tracks queue)
+        (message "Added %d tracks to queue '%s'."
+                 (length tracks) (listen-queue-name queue))
+        (listen-queue queue))
+    (message "No tracks found.")))
+
 (defun listen-subsonic-queue-random (n queue)
   "Fetch and add to QUEUE a list of N random songs."
   (interactive
@@ -303,13 +313,7 @@ Should be added to `listen-track-end-functions'."
                   "getRandomSongs"
                   'randomSongs 'song
                   `(("size" . ,(number-to-string n))))))
-    (if tracks
-        (progn
-          (listen-queue-add-tracks tracks queue)
-          (message "Added %d random tracks to queue '%s'."
-                   (length tracks) (listen-queue-name queue))
-          (listen-queue queue))
-      (message "No tracks returned from server."))))
+    (listen-subsonic--queue-tracks tracks queue)))
 
 ;; TODO: Deduplicate logic between this and the library code below
 (defun listen-subsonic-queue-playlist (queue)
@@ -319,24 +323,13 @@ Should be added to `listen-track-end-functions'."
          (name (completing-read "Playlist: " playlists nil t))
          (id (alist-get name playlists nil nil #'equal))
          (tracks (listen-subsonic--get-playlist-tracks id)))
-    (if tracks
-        (progn
-          (listen-queue-add-tracks tracks queue)
-          (message "Added %d tracks to queue '%s'."
-                   (length tracks) (listen-queue-name queue)))
-      (message "No tracks found."))))
+    (listen-subsonic--queue-tracks tracks queue)))
 
 (defun listen-subsonic-queue-starred-tracks (queue)
   "Add all starred songs from Subsonic server to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
   (let ((tracks (listen-subsonic-get-starred-tracks)))
-    (if tracks
-        (progn
-          (listen-queue-add-tracks tracks queue)
-          (message "Added %d tracks to queue '%s'."
-                   (length tracks) (listen-queue-name queue))
-          (listen-queue queue))
-      (message "No starred songs found."))))
+    (listen-subsonic--queue-tracks tracks queue)))
 
 ;; TODO: C-u adds to start of queue/next?
 ;; TODO; Use annotate-function to make this (and other functions) look better
