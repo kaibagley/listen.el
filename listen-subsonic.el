@@ -510,8 +510,18 @@ Select the \"[All]\" option to select all tracks under the current level."
               listen-subsonic--browse-current-name nil
               listen-subsonic--browse-current-level nil))
 
-(defvar listen-subsonic-cache-dir (expand-file-name "listen.el" temporary-file-directory)
-  "Directory to store cached subsonic data.")
+(defun listen-subsonic--browse-get-prefix (item)
+  "Return a fixed-width string of ls-like metadata for ITEM."
+  (let* ((dirp (alist-get 'isDir item))
+         (year (alist-get 'year item))
+         (duration (alist-get 'duration item))
+         (starred (alist-get 'starred item))
+         (bitrate (alist-get 'bitRate item)))
+    (format "%s %s %4s %5s "
+            (if dirp "d" "-")
+            (if starred "*" "-")
+            (if year (number-to-string year) "----")
+            (if dirp "--:--" (listen-format-seconds duration)))))
 
 (defun listen-subsonic-clear-cache ()
   "Clear the Subsonic cache directory."
@@ -616,12 +626,14 @@ Select the \"[All]\" option to select all tracks under the current level."
              (name (alist-get 'name item))
              (art-id (or (alist-get 'coverArt item) (alist-get 'id item)))
              (text (concat (if dirp "📁 " "🎵 ") name))
-             (pt (point))
+             (prefix (listen-subsonic--browse-get-prefix item))
+             (pt (+ (point) (length prefix)))
              (face (cond
                     ((not dirp) 'listen-track)
                     ((eq level :root) 'listen-genre)
                     ((eq level :indexes) 'listen-artist)
                     (t 'listen-album))))
+        (insert (propertize prefix 'face 'shadow))
         (insert-text-button
          text
          'action #'listen-subsonic--browse-button
