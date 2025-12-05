@@ -138,16 +138,16 @@ parameters."
 Returns the response's data, or signals an error.
 Should be called from a buffer containing an API response."
   (goto-char (point-min))
-  (if (zerop (buffer-size))
-      (error "Subsonic API response is empty")
-    (let* ((json-data (json-parse-buffer :object-type 'alist
-                                         :null-object nil
-                                         :false-object nil))
-           (response (alist-get 'subsonic-response json-data)))
-      (if (string-equal "ok" (alist-get 'status response))
-          response
-        (error "Subsonic API response returned error: %s"
-               (alist-get 'message (alist-get 'error response)))))))
+  (when (zerop (buffer-size))
+    (error "Subsonic API response is empty"))
+  (let* ((json-data (json-parse-buffer :object-type 'alist
+                                       :null-object nil
+                                       :false-object nil))
+         (response (alist-get 'subsonic-response json-data)))
+    (unless (string-equal "ok" (alist-get 'status response))
+      (error "Subsonic API response returned error: %s"
+             (alist-get 'message (alist-get 'error response))))
+    response))
 
 (defun listen-subsonic--api-call (endpoint &optional params callback)
   "Make a call to the Subsonic API.
@@ -165,6 +165,14 @@ If CALLBACK is non-nil, run asynchronously and call CALLBACK with the data."
       :as #'listen-subsonic--process-api-response
       :then (or callback 'sync))))
 
+(defun listen-subsonic--ensure-list (item)
+  "Ensure ITEM is a list."
+  (cond
+   ((vectorp item) (append item nil))
+   ((null item) nil)
+   ((and (listp item) (consp (car item))) (list item))
+   (t (list item))))
+
 ;;;; Read requests
 
 (defun listen-subsonic--get-tracks (endpoint rootkey itemkey &optional params)
@@ -180,8 +188,7 @@ request labelled ITEMKEY."
          (data (alist-get rootkey response))
          (tracks (alist-get itemkey data))
          ;; Let bind cached auth params
-         (listen-subsonic--auth-cache (or listen-subsonic--auth-cache
-                                          (listen-subsonic--get-auth-params))))
+         (listen-subsonic--auth-cache (listen-subsonic--get-auth-params)))
     (mapcar #'listen-subsonic--json-to-listen tracks)))
 
 (defun listen-subsonic--get-browse (endpoint rootkey itemkey)
@@ -352,14 +359,14 @@ Should be added to `listen-track-end-functions'."
           (listen-queue queue))
       (message "No tracks found or added to '%s'" query))))
 
+;; TODO: merge this with get-folder-tracks to simplify browse code
 (defun listen-subsonic--get-all-tracks (id)
   "Fetch all tracks under directory ID recursively."
   (let* ((data (listen-subsonic--api-call "getMusicDirectory" `(("id" . ,id))))
          (parent (alist-get 'directory data))
          (children (alist-get 'child parent))
          ;; Let bind cached variables
-         (listen-subsonic--auth-cache (or listen-subsonic--auth-cache
-                                          (listen-subsonic--get-auth-params))))
+         (listen-subsonic--auth-cache (listen-subsonic--get-auth-params)))
     (mapcan (lambda (c)
               (if (alist-get 'isDir c)
                   (listen-subsonic--get-all-tracks (alist-get 'id c))
@@ -373,82 +380,66 @@ Should be added to `listen-track-end-functions'."
                                  ("query" . "")
                                  ("songCount" . "100000"))))
 
+;; Directory browsing functions
+(defun listen-subsonic--get-nodes (level id)
+  "Return a list of items from browsing LEVEL using ID."
+  (let ((items
+         (pcase level
+           (:root
+            (let* ((data (listen-subsonic--api-call "getMusicFolders"))
+                   (items (listen-subsonic--ensure-list
+                           (map-nested-elt data '(musicFolders musicFolder)))))
+              (mapcar (lambda (item) (cons '(isDir . t) item)) items)))
+           (:indexes
+            (let ((data (listen-subsonic--api-call "getIndexes" `(("musicFolderId" . ,id)))))
+              (listen-subsonic--flatten-indexes data)))
+           (:directory
+            (let ((data (listen-subsonic--api-call "getMusicDirectory" `(("id" . ,id)))))
+              (listen-subsonic--ensure-list (map-nested-elt data '(directory child))))))))
+    ;; ensure every item has a 'name
+    (mapcar (lambda (item)
+              (if (alist-get 'title item)
+                  (cons (cons 'name (alist-get 'title item)) item)
+                item))
+            items)))
+
+;; completing-read browser
+
 (defun listen-subsonic--browse-step (level id name &optional history)
-  (let (prompt
-        next
-        candidates)
-    (pcase level
-      (:libraries
-       (let ((data (listen-subsonic--api-call "getMusicFolders")))
-         (setq prompt "Library: "
-               next :artists
-               candidates (mapcar (lambda (f)
-                                    (cons (alist-get 'name f)
-                                          (alist-get 'id f)))
-                                  (alist-get 'musicFolder
-                                             (alist-get 'musicFolders data))))))
-      (:artists
-       (let* ((data (listen-subsonic--api-call "getIndexes" `(("musicFolderId" . ,id))))
-              (indexes-list (append (alist-get 'index (alist-get 'indexes data)) nil))
-              (all-artists (mapcan (lambda (idx)
-                                     (append (alist-get 'artist idx) nil))
-                                   indexes-list)))
-         (setq prompt (format "%s: " name)
-               next :albums
-               candidates (mapcar (lambda (a)
-                                    (cons (alist-get 'name a)
-                                          (alist-get 'id a)))
-                                  all-artists))))
-      ((or :albums :songs)
-       (let* ((data (listen-subsonic--api-call "getMusicDirectory" `(("id" . ,id))))
-              (children (alist-get 'child (alist-get 'directory data))))
-         (setq prompt (format "%s: " name)
-               next (if (eq level :albums) :songs :track)
-               candidates (mapcar (lambda (s)
-                                    (cons (or (alist-get 'title s) (alist-get 'name s))
-                                          s))
-                                  children)))))
+  (let* ((items (listen-subsonic--get-nodes level id))
+         (candidates (mapcar (lambda (item) (cons (alist-get 'name item) item)) items))
+         (next (listen-subsonic--browse-next-level level))
+         (prompt (if (eq level :root) "Library: " (format "%s: " name))))
 
     (let* ((choices (append
                      ;; When theres history, add an up option
                      (when history
                        '((".." . :up)))
-                     ;; Dont show "All" for libraries (too much)
-                     (unless (eq level :libraries)
-                       (cons (cons "[All]" :this) nil))
+                     ;; Dont show "All" for root (too much)
+                     (unless (eq level :root)
+                       '(("[All]" . :this)))
                      candidates))
            (sel-name (completing-read prompt (mapcar #'car choices) nil t))
            (selection (cdr (assoc sel-name choices))))
       (cond
        ;; User selected ".."
        ((eq selection :up)
-        (let ((prev (car history)))
-          (listen-subsonic--browse-step (nth 0 prev)
-                                        (nth 1 prev)
-                                        (nth 2 prev)
-                                        (cdr history)))) ; Latest history
+        (apply #'listen-subsonic--browse-step (car history))) ; Latest history
        ;; User selected All
        ((eq selection :this)
         (list (lambda ()
-                (let ((gc-cons-threshold 10000000)) ;; 100 MB GC
-                  (pcase level
-                    (:artists
-                     (listen-subsonic--get-folder-tracks id))
-                    (_
-                     (listen-subsonic--get-all-tracks id)))))
+                (pcase level
+                  (:indexes
+                   (listen-subsonic--get-folder-tracks id))
+                  (_
+                   (listen-subsonic--get-all-tracks id))))
               (format "Subsonic: %s" name)))
        ;; Descending a level
-       ((or (stringp selection) (numberp selection))
-        (listen-subsonic--browse-step next
-                                      (format "%s" selection)
-                                      sel-name
-                                      (cons (list level id name) history))) ; Add history
-       ;; Selected a dir-like object
-       ((and (listp selection) (alist-get 'isDir selection))
+       ((and (alist-get 'isDir selection))
         (listen-subsonic--browse-step next
                                       (alist-get 'id selection)
                                       sel-name
-                                      (cons (list level id name) history))) ; Add history
+                                      (cons (list level id name history) history))) ; Add history
        ;; Song/bottom level
        (t
         (list (lambda () (list (listen-subsonic--json-to-listen selection)))
@@ -459,9 +450,11 @@ Should be added to `listen-track-end-functions'."
 Library hierarchy: Folder -> Artist -> Album -> Song.
 Select the \"[All]\" option to select all tracks under the current level."
   (interactive)
-  (let ((result (listen-subsonic--browse-step :libraries nil "Root")))
+  (let ((result (listen-subsonic--browse-step :root nil "Root")))
     (when result
-      (listen-library (nth 0 result) :name (nth 1 result)))))
+      (if (called-interactively-p 'interactive)
+          (listen-library (nth 0 result) :name (nth 1 result))
+        (funcall (nth 0 result))))))
 
 (defun listen-library-from-subsonic (source)
   "Show a library view for subsonic."
