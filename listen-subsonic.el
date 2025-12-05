@@ -484,5 +484,216 @@ Select the \"[All]\" option to select all tracks under the current level."
     (listen-library tracks-fn
                     :name (format "Subsonic: %s" source))))
 
+;; dired-like browser
+
+(define-derived-mode listen-subsonic-browse-mode special-mode "Subsonic-Browser"
+  "Major mode for `dired'-like browsing of Subsonic libraries."
+  :interactive nil
+  (define-key listen-subsonic-browse-mode-map (kbd "^") #'listen-subsonic--browse-up)
+  (define-key listen-subsonic-browse-mode-map (kbd "g") #'revert-buffer)
+  (define-key listen-subsonic-browse-mode-map (kbd "A") #'listen-subsonic--browse-add-all)
+  (setq-local revert-buffer-function #'listen-subsonic--browse-revert
+              listen-subsonic--browse-history nil
+              listen-subsonic--browse-current-id nil
+              listen-subsonic--browse-current-name nil
+              listen-subsonic--browse-current-level nil))
+
+(defvar listen-subsonic-cache-dir (expand-file-name "listen.el" temporary-file-directory)
+  "Directory to store cached subsonic data.")
+
+(defun listen-subsonic-clear-cache ()
+  "Clear the Subsonic cache directory."
+  (interactive)
+  (when (file-exists-p listen-subsonic-cache-dir)
+    (delete-directory listen-subsonic-cache-dir t))
+  (message "Cleared Subsonic cache."))
+
+(defvar listen-subsonic--art-queue nil
+  "Queue for art downloads in browser.")
+(defvar listen-subsonic--art-active 0
+  "Number of active downloads.")
+(defvar listen-subsonic--art-max 10
+  "Max concurrent downloads.")
+
+(defun listen-subsonic--browse-next-level (level)
+  "Return the next level under LEVEL."
+  (pcase level
+    (:root :indexes)
+    (:indexes :directory)
+    (_ :directory)))
+
+(defun listen-subsonic--process-art-queue ()
+  "Process background art queue."
+  (while (and listen-subsonic--art-queue
+              (< listen-subsonic--art-active listen-subsonic--art-max))
+    (setq listen-subsonic--art-active (1+ listen-subsonic--art-active))
+    (pcase-let ((`(,url ,file ,buf ,pos) (pop listen-subsonic--art-queue)))
+      (plz 'get url
+        :as 'binary
+        :then (lambda (data)
+                (setq listen-subsonic--art-active (1- listen-subsonic--art-active))
+                (let ((coding-system-for-write 'no-conversion))
+                  (with-temp-file file
+                    (set-buffer-multibyte nil)
+                    (insert data)))
+                (listen-subsonic--display-art file buf pos)
+                (listen-subsonic--process-art-queue))
+        :else (lambda (_)
+                (setq listen-subsonic--art-active (1- listen-subsonic--art-active))
+                (listen-subsonic--process-art-queue))))))
+
+(defun listen-subsonic--browse-fetch-art (id buf pos)
+  "Fetch cover art for ID and display it a POS in BUF."
+  (unless (file-exists-p listen-subsonic-cache-dir)
+    (make-directory listen-subsonic-cache-dir))
+  (let ((file (expand-file-name (format "%s.jpg" id) listen-subsonic-cache-dir))
+        (url (listen-subsonic--build-url "getCoverArt"
+                                         (append (listen-subsonic--get-auth-params)
+                                                 `(("id" . ,id) ("size" . "64"))))))
+    (if (file-exists-p file)
+        ;; cached
+        (listen-subsonic--display-art file buf pos)
+      ;; download
+      (push (list url file buf pos) listen-subsonic--art-queue)
+      (listen-subsonic--process-art-queue))))
+
+(defun listen-subsonic--display-art (file buf pos)
+  "Display FILE's image in BUF at POS."
+  (when (buffer-live-p buf)
+    (with-current-buffer buf
+      (with-silent-modifications
+        (let ((image (create-image file nil nil
+                                  :ascent 'center
+                                  :height 64)))
+          (put-text-property pos (1+ pos) 'display image))))))
+
+(defun listen-subsonic--flatten-indexes (data)
+  "Get a flat list of artists from DATA, which is JSON returned by the \"getIndexes\" endpoint."
+  (let ((idxs (listen-subsonic--ensure-list (map-nested-elt data '(indexes index)))))
+    (mapcan (lambda (idx)
+              (let ((artists (listen-subsonic--ensure-list
+                              (alist-get 'artist idx))))
+                (mapcar (lambda (a) (cons '(isDir . t) a)) artists)))
+            idxs)))
+
+;; Render the "dired" buffer
+(defun listen-subsonic--browse-render (id name level)
+  "Display a view for LEVEL (folder/artist/album) of ID and NAME."
+  (setq-local listen-subsonic--browse-current-id id
+              listen-subsonic--browse-current-name name
+              listen-subsonic--browse-current-level level)
+  (let* ((inhibit-read-only t)
+         (items (listen-subsonic--get-nodes level id))
+         (next (listen-subsonic--browse-next-level level)))
+
+    ;; prepare buffer
+    (erase-buffer)
+    ;; "path" of current level
+    (let* ((parents (mapcar (lambda (h) (nth 1 h)) listen-subsonic--browse-history))
+           (path (reverse (cons name parents))))
+      (insert (propertize (string-join path " / ") 'face 'dired-header) "\n"))
+    ;; "." to revert buffer/refresh
+    ;; ".." to go up (same as "^" bind)
+    (insert-text-button "."
+                        'action (lambda (_) (revert-buffer))
+                        'follow-link t
+                        'face 'dired-directory)
+    (insert "\n")
+    (when listen-subsonic--browse-history
+      (insert-text-button ".."
+                          'action (lambda (_) (listen-subsonic--browse-up))
+                          'follow-link t
+                          'face 'dired-directory)
+      (insert "\n"))
+    ;; add the actual items
+    (dolist (item items)
+      (let* ((dirp (alist-get 'isDir item))
+             (name (alist-get 'name item))
+             (art-id (or (alist-get 'coverArt item) (alist-get 'id item)))
+             (text (concat (if dirp "📁 " "🎵 ") name))
+             (pt (point))
+             (face (cond
+                    ((not dirp) 'listen-track)
+                    ((eq level :root) 'listen-genre)
+                    ((eq level :indexes) 'listen-artist)
+                    (t 'listen-album))))
+        (insert-text-button
+         text
+         'action #'listen-subsonic--browse-button
+         'follow-link t
+         'subsonic-item item
+         'subsonic-next (if dirp next nil)
+         'face face)
+        (insert "\n")
+        ;; async load cover art
+        (when (and art-id (not (or (eq level :root) (eq level :indexes))))
+          (listen-subsonic--browse-fetch-art art-id (current-buffer) pt))))
+    (goto-char (point-min))))
+
+;; browser functions
+
+(defun listen-subsonic--browse-add-all ()
+  "Add all tracks in/under the current view to the current queue."
+  (interactive)
+  (let ((tracks (pcase listen-subsonic--browse-current-level
+                  (:indexes
+                   (listen-subsonic--get-folder-tracks listen-subsonic--browse-current-id))
+                  (:directory
+                   (listen-subsonic--get-all-tracks listen-subsonic--browse-current-id))
+                  (_
+                   (user-error "Cannot add all tracks under the current view or the root level.")))))
+    (when tracks
+      (listen-queue-add-tracks tracks (listen-queue-complete))
+      (message "Added %d tracks to the queue." (length tracks)))
+    (message "No tracks found.")))
+
+(defun listen-subsonic--browse-button (&optional button)
+  "Activate the text button at point.
+If button at point is a directory, it will enter and redisplay the buffer.
+If button at point is a song, it will add it to the current queue."
+  (interactive)
+  (let* ((pt (if button (button-start button) (point)))
+         (item (get-text-property pt 'subsonic-item))
+         (next (get-text-property pt 'subsonic-next)))
+    (unless item (user-error "No item at point"))
+
+    ;; open directory
+    (if (alist-get 'isDir item)
+        (progn
+          ;; add current state to history
+          (push (list listen-subsonic--browse-current-id
+                      listen-subsonic--browse-current-name
+                      listen-subsonic--browse-current-level)
+                listen-subsonic--browse-history)
+          ;; display next level
+          (listen-subsonic--browse-render (alist-get 'id item)
+                                          (or (alist-get 'title item) (alist-get 'name item))
+                                          next))
+      ;; song
+      (listen-queue-add-tracks (list (listen-subsonic--json-to-listen item))
+                               (listen-queue-complete))
+      (message "Added '%s' to queue." (alist-get 'title item)))))
+
+(defun listen-subsonic--browse-up ()
+  "Go up a level in the Subsonic directory structure."
+  (interactive)
+  (if-let ((prev (pop listen-subsonic--browse-history)))
+      (listen-subsonic--browse-render (nth 0 prev) (nth 1 prev) (nth 2 prev))
+    (message "This is the highest level.")))
+
+(defun listen-subsonic--browse-revert (_ignore-auto _noconfirm)
+  (listen-subsonic--browse-render listen-subsonic--browse-current-id
+                                  listen-subsonic--browse-current-name
+                                  listen-subsonic--browse-current-level))
+
+(defun listen-subsonic-browse ()
+  "Open a `dired'-like Subsonic browser buffer."
+  (interactive)
+  (let ((buf (get-buffer-create "*Listen Subsonic Browser*")))
+    (with-current-buffer buf
+      (listen-subsonic-browse-mode)
+      (listen-subsonic--browse-render nil "Root" :root)) ;; Start at :root
+    (switch-to-buffer buf)))
+
 (provide 'listen-subsonic)
 ;;; listen-subsonic.el ends here
