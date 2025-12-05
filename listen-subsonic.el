@@ -187,40 +187,13 @@ If AUTH-PARAMS is nil, new auth params are generated."
 
 ;;;; Read requests
 
-(defun listen-subsonic--get-tracks (endpoint rootkey itemkey &optional params)
-  "Return tracks from Subsonic REST ENDPOINT.
-Returned alist is the contents of ROOTKEY, then ITEMKEY of the API
-response. PARAMS are optional API parameters.
-
-The parsed API response consists of an alist which is mostly metadata
-and a data structure labelled ROOTKEY. This data is another alist with
-metadata about the request data, and the interesting part of the
-request labelled ITEMKEY."
+(defun listen-subsonic--get-items (endpoint rootkey itemkey &optional params)
+  "Call ENDPOINT and get the contents of ROOTKEY, then ITEMKEY.
+PARAMS are optional API parameters."
   (let* ((response (listen-subsonic--api-call endpoint params))
-         (data (alist-get rootkey response))
-         (tracks (alist-get itemkey data)))
-    (mapcar (lambda (track)
-              (listen-subsonic--json-to-listen track
-                                               (listen-subsonic--get-auth-params))
-            tracks)))
-
-(defun listen-subsonic--get-browse (endpoint rootkey itemkey)
-  "Return an alist from Subsonic ENDPOINT as (name . id).
-The \"browse\" API endpoints have similarly structured responses.
-Returned alist is the contents of ROOTKEY, then ITEMKEY of the
-API response.
-
-The parsed API response consists of an alist which is mostly metadata
-and a data structure labelled ROOTKEY. This data is another alist with
-metadata about the request data, and the interesting part of the
-request labelled ITEMKEY."
-  (let* ((response (listen-subsonic--api-call endpoint))
-         (data (alist-get rootkey response))
-         (items (alist-get itemkey data)))
-    (mapcar (lambda (item)
-              (cons (alist-get 'name item)
-                    (format "%s" (alist-get 'id item)))) ; This must be a string
-            items)))
+         (root (alist-get rootkey response))
+         (items (alist-get itemkey root)))
+    (listen-subsonic--ensure-list items)))
 
 ;; TODO: This blocks emacs while waiting for response
 ;; Look into consult's async features at some
@@ -229,22 +202,33 @@ request labelled ITEMKEY."
   "Return a list of `listen-track' objects.
 Uses the Subsonic API's \"search3\" endpoint with QUERY as the search query.
 The maximum returned tracks is 50."
-  (listen-subsonic--get-tracks "search3" 'searchResult3 'song
-                               `(("query" . ,query) ("songCount" . ,listen-subsonic-search-max-results))))
+  (let ((items (listen-subsonic--get-items
+                "search3" 'searchResult3 'song
+                `(("query" . ,query)
+                  ("songCount" . ,listen-subsonic-search-max-results)))))
+    (mapcar #'listen-subsonic--json-to-listen items)))
 
 (defun listen-subsonic-get-starred-tracks ()
   "Fetch all starred songs from Subsonic server."
-  (listen-subsonic--get-tracks "getStarred" 'starred 'song))
+  (let ((items (listen-subsonic--get-items
+                "getStarred" 'starred 'song)))
+    (mapcar #'listen-subsonic--json-to-listen items)))
 
 (defun listen-subsonic--get-playlists ()
-  "Return a list of all playlists accessible to the user."
-  (listen-subsonic--get-browse "getPlaylists" 'playlists 'playlist))
+  "Return an alist (name . id) of all playlists accessible to the user."
+  (let ((items (listen-subsonic--get-items
+                "getPlaylists" 'playlists 'playlist)))
+    (mapcar (lambda (item)
+              (cons (alist-get 'name item)
+                    (format "%s" (alist-get 'id item))))
+            items)))
 
 (defun listen-subsonic--get-playlist-tracks (playlist)
   "Return all tracks in PLAYLIST."
-  (listen-subsonic--get-tracks "getPlaylist"
-                               'playlist 'entry
-                               `(("id" . ,playlist))))
+  (let ((items (listen-subsonic--get-items
+                "getPlaylist" 'playlist 'entry
+                `(("id" . ,playlist)))))
+    (mapcar #'listen-subsonic--json-to-listen items)))
 
 ;; TODO: merge this with get-folder-tracks to simplify browse code
 (defun listen-subsonic--get-all-tracks (id)
@@ -257,14 +241,16 @@ The maximum returned tracks is 50."
                   (listen-subsonic--get-all-tracks (alist-get 'id c))
                 (list (listen-subsonic--json-to-listen c
                                                        (listen-subsonic--get-auth-params)))))
-            children))))
+            children)))
 
 (defun listen-subsonic--get-folder-tracks (id)
   "Return all tracks in music folder ID."
-  (listen-subsonic--get-tracks "search3" 'searchResult3 'song
-                               `(("musicFolderId" . ,id)
-                                 ("query" . "")
-                                 ("songCount" . "100000"))))
+  (let ((items (listen-subsonic--get-items
+                "search3" 'searchResult3 'song
+                `(("musicFolderId" . ,id)
+                  ("query" . "")
+                  ("songCount" . "100000")))))
+    (mapcar #'listen-subsonic--json-to-listen items)))
 
 ;;;; Write requests
 
@@ -383,10 +369,10 @@ Should be added to `listen-track-end-functions'."
    (list
     (read-number "Number of songs: " 10)
     (listen-queue-complete :allow-new-p t)))
-  (let* ((tracks (listen-subsonic--get-tracks
-                  "getRandomSongs"
-                  'randomSongs 'song
-                  `(("size" . ,(number-to-string n))))))
+  (let* ((items (listen-subsonic--get-items
+                 "getRandomSongs" 'randomSongs 'song
+                 `(("size" . ,(number-to-string n)))))
+         (tracks (mapcar #'listen-subsonic--json-to-listen items)))
     (listen-subsonic--queue-tracks tracks queue)))
 
 ;; TODO: Deduplicate logic between this and the library code below
