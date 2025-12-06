@@ -41,30 +41,31 @@
 ;;;; Customisation
 
 (defgroup listen-subsonic nil
-  "`listen' options for Subsonic."
+  "`listen' options for Subsonic backend."
   :group 'listen)
 
 (defcustom listen-subsonic-url nil
-  "The base URL of your Subsonic-compatible server.
-e.g., \"music.example.com\""
+  "The fully-qualified domain name of your Subsonic-compatible server.
+For example, \"music.example.com\" or \"192.168.0.0:4533\".
+Don't include the procol/scheme or the resource path."
   :type 'string
   :group 'listen-subsonic)
 
 (defcustom listen-subsonic-protocol "https"
   "Protocol to use for calls to Subsonic API.
-Must be either \"http\" or \"https\""
+Must be either \"http\" or \"https\" (default)."
   :type '(choice (const :tag "HTTPS" "https")
                  (const :tag "HTTP" "http"))
   :group 'listen-subsonic)
 
 (defcustom listen-subsonic-search-max-results 200
-  "Maximum results to return in search queries.
-Must be a string."
-  :type 'string
+  "Maximum results to return in search queries."
+  :type 'integer
   :group 'listen-subsonic)
 
 (defcustom listen-subsonic-user-agent "listen.el"
-  "User-agent used in API requests."
+  "User-agent used in API requests.
+Used by the server to identify `listen'."
   :type 'string
   :group 'listen-subsonic)
 
@@ -74,22 +75,32 @@ Must be a string."
   :group 'listen-subsonic)
 
 (defvar listen-subsonic-cache-dir (expand-file-name "listen.el" temporary-file-directory)
-  "Directory to store cached subsonic data.")
+  "Directory to store cached files such as cover art.")
 
 (defvar listen-subsonic--art-queue nil
-  "Queue for art downloads in browser.")
+  "Queue for art downloads in browser.
+Each element is a list: (url filename buffer position).
+url is the URL of the art to download.
+filename is the file to write to.
+buffer and position specify where to display the art when downloaded.")
 
 (defvar listen-subsonic--art-active 0
-  "Number of active downloads.")
+  "Number of concurrent active downloads associated with `listen-subsonic--art-queue'.
+Used to keep concurrent downloads below `listen-subsonic--art-max'.")
 
 (defvar listen-subsonic--art-max 10
-  "Max concurrent downloads.")
+  "Max allowed concurrent downloads.
+Used to limit connections to the server.")
 
 ;;;; General helpers
 
 ;; TODO: I really don't like this function, can it be destroyed?
 (defun listen-subsonic--ensure-list (item)
-  "Ensure ITEM is a list."
+  "Return ITEM as a list.
+If ITEM is:
+- a vector: convert to a list.
+- a list: return ITEM as is.
+- anything else: wrap it in a list."
   (if (vectorp item)
       (append item nil)
     ;; This already exists?
@@ -98,13 +109,15 @@ Must be a string."
 ;;;; Auth helpers
 
 (defun listen-subsonic--get-credentials ()
-  "Fetch user credentials securely from `auth-source`."
-  (let ((auth (auth-source-search :host listen-subsonic-url)))
-    (when auth
-      (car auth))))
+  "Fetch user credentials securely using `auth-source'.
+Returns an auth-source plist, or nil if not found.
+
+Searches `auth-source' files for an entry with \":host\" matching `listen-subsonic-url'."
+  (or (car (auth-source-search :host listen-subsonic-url)) nil))
 
 (defun listen-subsonic--get-auth-params ()
-  "Return auth info alist for API calls."
+  "Return authentication info for Subsonic API calls.
+Return an alist of strings: ((\"u\" . \"myusername\") (\"t\" . \"<randomstring>\") ...)."
   (let* ((creds (listen-subsonic--get-credentials))
          (user (plist-get creds :user))
          (pass (funcall (plist-get creds :secret)))
@@ -118,7 +131,12 @@ Must be a string."
       ("f" . "json"))))
 
 (defun listen-subsonic--build-url (endpoint params)
-  "Build a Subsonic API URL from ENDPOINT and PARAMS."
+  "Build a Subsonic REST API URL from ENDPOINT and PARAMS.
+Returns a complete URL required to make an API call.
+
+ENDPOINT is the API method name, see `https://www.navidrome.org/docs/developers/subsonic-api/' for
+details.
+PARAMS is an alist of query parameters."
   (let* ((param-list (mapcar (lambda (p)
                                (list (car p) (cdr p)))
                              params))
@@ -133,7 +151,8 @@ Must be a string."
 
 (defun listen-subsonic--process-api-response ()
   "Parse JSON response from a Subsonic API request.
-Returns the response's data, or signals an error.
+Returns data contained in `subsonic-response' alist, or signals an error.
+
 Should be called from a buffer containing an API response."
   (goto-char (point-min))
   (when (zerop (buffer-size))
@@ -149,10 +168,17 @@ Should be called from a buffer containing an API response."
 
 (defun listen-subsonic--api-call (endpoint &optional params callback)
   "Make a call to the Subsonic API.
-ENDPOINT is the API method defined by the Subsonic or OpenSubsonic API specifications.
+Returns the parsed JSON if CALLBACK is nil.
+Returns the curl process object if CALLBACK is non-nil.
+
+ENDPOINT is the API method name, see `https://www.navidrome.org/docs/developers/subsonic-api/' for
+details.
 PARAMS is an alist of additional parameters.
-If CALLBACK is nil, run synchronously and return the parsed JSON.
-If CALLBACK is non-nil, run asynchronously and call CALLBACK with the data."
+If CALLBACK is nil, run synchronously and parse the JSON response.
+If CALLBACK is non-nil, run asynchronously and parse the JSON response, then call CALLBACK on the
+parsed JSON.
+
+The JSON should usually be processed by `listen-subsonic--process-api-response'."
   (unless listen-subsonic-url
     (user-error "Please set `listen-subsonic-url'"))
   (let* ((api-params (append (listen-subsonic--get-auth-params) params))
@@ -166,15 +192,19 @@ If CALLBACK is non-nil, run asynchronously and call CALLBACK with the data."
 ;;;; Data formatting
 
 (defun listen-subsonic--get-stream-url (id &optional auth-params)
-  "Return a URL for MPV to directly stream track with ID.
+  "Create a streaming URL for track with ID.
+Returns a complete URL for MPV or VLC to directly stream from the server.
+
 If AUTH-PARAMS is nil, new auth params are generated."
   (listen-subsonic--build-url
    "stream"
    (append (or auth-params (listen-subsonic--get-auth-params))
            `(("id" . ,id)))))
 
-(defun listen-subsonic--json-to-listen (s &optional auth-params)
-  "Convert JSON alist S into a `listen-track' structure.
+(defun listen-subsonic--json-to-listen (json-data &optional auth-params)
+  "Convert Subsonic JSON-DATA into a `listen-track'.
+Returns a `listen-track' struct.
+
 If AUTH-PARAMS is nil, new auth params are generated."
   (map-let
       (('id id) ('userRating rating) artist title album track genre duration year starred)
@@ -198,7 +228,13 @@ If AUTH-PARAMS is nil, new auth params are generated."
 ;;;; Read requests
 
 (defun listen-subsonic--get-items (endpoint rootkey itemkey &optional params)
-  "Call ENDPOINT and get the contents of ROOTKEY, then ITEMKEY.
+  "Get data from ENDPOINT and extract the contents of ROOTKEY, then ITEMKEY.
+Returns a list of alists representing the items.
+
+ENDPOINT is the API method name, see `https://www.navidrome.org/docs/developers/subsonic-api/' for
+details.
+ROOTKEY is the top-level JSON key in the API repsonse, ITEMKEY is the
+inner key (for example, \"searchResult3\" and \"song\"). Go to the above link for details.
 PARAMS are optional API parameters."
   (let* ((response (listen-subsonic--api-call endpoint params))
          (root (alist-get rootkey response))
@@ -206,9 +242,10 @@ PARAMS are optional API parameters."
     (listen-subsonic--ensure-list items)))
 
 (defun listen-subsonic-search-tracks (query)
-  "Return a list of `listen-track' objects.
-Uses the Subsonic API's \"search3\" endpoint with QUERY as the search query.
-The maximum returned tracks is 50."
+  "Search the server for tracks matching QUERY.
+Returns a list of `listen-track's.
+
+Uses the Subsonic API's \"search3\" endpoint with QUERY as the search query."
   (let ((items (listen-subsonic--get-items
                 "search3" 'searchResult3 'song
                 `(("query" . ,query)
@@ -219,7 +256,8 @@ The maximum returned tracks is 50."
             items)))
 
 (defun listen-subsonic-get-starred-tracks ()
-  "Fetch all starred songs from Subsonic server."
+  "Fetch all starred songs from the server.
+Returns a list of `listen-track's."
   (let ((items (listen-subsonic--get-items
                 "getStarred" 'starred 'song))
         (auth (listen-subsonic--get-auth-params)))
@@ -228,7 +266,8 @@ The maximum returned tracks is 50."
             items)))
 
 (defun listen-subsonic--get-playlists ()
-  "Return an alist (name . id) of all playlists accessible to the user."
+  "Fetch all of the user's playlists from the server.
+Returns an alist mapping playlist names to their IDs: ((name . id) ...)."
   (let ((items (listen-subsonic--get-items
                 "getPlaylists" 'playlists 'playlist)))
     (mapcar (lambda (item)
@@ -236,18 +275,24 @@ The maximum returned tracks is 50."
                     (format "%s" (alist-get 'id item))))
             items)))
 
-(defun listen-subsonic--get-playlist-tracks (playlist)
-  "Return all tracks in PLAYLIST."
+(defun listen-subsonic--get-playlist-tracks (id)
+  "Fetch all tracks in playlist with ID.
+Returns a list of `listen-track's."
   (let ((items (listen-subsonic--get-items
                 "getPlaylist" 'playlist 'entry
-                `(("id" . ,playlist))))
+                `(("id" . ,id))))
         (auth (listen-subsonic--get-auth-params)))
     (mapcar (lambda (item)
               (listen-subsonic--json-to-listen item auth))
             items)))
 
 (defun listen-subsonic--get-all-tracks (id)
-  "Fetch all tracks under directory ID recursively."
+  "Fetch all tracks under directory ID recursively.
+Returns a list of `listen-track's.
+
+Makes API calls for each subdirectory under ID, and creates a flat list of tracks.
+Unfortunately this must be recursive, since the \"search3\" uses ID3 IDs, rather than those returned
+by \"getMusicDirectory\"."
   (let* ((data (listen-subsonic--api-call "getMusicDirectory" `(("id" . ,id))))
          (parent (alist-get 'directory data))
          (children (alist-get 'child parent))
@@ -259,7 +304,10 @@ The maximum returned tracks is 50."
             children)))
 
 (defun listen-subsonic--get-folder-tracks (id)
-  "Return all tracks in music folder ID."
+  "Return all tracks in music folder ID.
+Returns a list of `listen-track's.
+
+Uses the \"search3\" endpoint to retrieve all tracks within ID."
   (let ((items (listen-subsonic--get-items
                 "search3" 'searchResult3 'song
                 `(("musicFolderId" . ,id)
@@ -273,9 +321,14 @@ The maximum returned tracks is 50."
 ;;;; Write requests
 
 (defun listen-subsonic-star-track (track star-p)
-  "Send a request to the \"star\" or \"unstar\" Subsonic endpoints.
-Star (when STAR-P is non-nil) or unstar TRACK.
-When called interactively, the star-state of the song will be toggled."
+  "Set TRACK's star status according to STAR-P.
+Returns the unparsed API response.
+
+Send a request to the \"star\" or \"unstar\" Subsonic endpoints, star (when STAR-P is non-nil) or
+unstar TRACK.
+When called interactively, the star-state of the song will be toggled.
+
+This function also sets TRACK's metadata accordingly."
   (interactive
    (let ((track (listen-queue-complete-track (listen-queue-complete))))
      (list track (not (alist-get 'starred (listen-track-etc track))))))
@@ -289,6 +342,8 @@ When called interactively, the star-state of the song will be toggled."
 
 (defun listen-subsonic--scrobble (player submission-p)
   "Scrobble the current track playing in PLAYER's queue to the Subsonic API.
+Returns the unparsed API response.
+
 When SUBMISSION-P is non-nil, server is notified that the currently playing track is finished.
 When SUBMISSION-P is nil, server is notified the current tracks is \"now playing\"."
   (when-let* ((queue (map-elt (listen-player-etc player) :queue))
@@ -300,19 +355,27 @@ When SUBMISSION-P is nil, server is notified the current tracks is \"now playing
       (listen-subsonic--api-call "scrobble" params #'ignore))))
 
 (defun listen-subsonic-scrobble-start (player)
-  "Notifies the Subsonic server that we have started playing a track in PLAYER.
+  "Notifies the server that we have started playing a track in PLAYER.
 Should be added to `listen-track-start-functions'."
   (listen-subsonic--scrobble player nil))
 
 (defun listen-subsonic-scrobble-end (player)
-  "Notifies the Subsonic server that we have finished a track in PLAYER.
+  "Notifies the server that we have finished a track in PLAYER.
 Should be added to `listen-track-end-functions'."
   (listen-subsonic--scrobble player t))
 
 ;;;; Server browsing functions
 
 (defun listen-subsonic--get-nodes (level id)
-  "Return a list of items from browsing LEVEL using ID."
+  "Fetch \"nodes\" for directory hierarchy LEVEL and ID.
+Returns a list of alists, each alist representing children of ID.
+
+LEVEL determines the endpoint to use, and may be one of:
+- :root: Returns top-level music folders using endpoint \"getMusicFolders\".
+- :indexes: Returns artist indexes using \"getIndexes\".
+- :directory: Returns children of the specified directory using \"getMusicDirectory\".
+
+ID refers to the folder or \"directory\" (artist or album)."
   (let ((items
          (pcase level
            (:root
@@ -333,9 +396,10 @@ Should be added to `listen-track-end-functions'."
                 item))
             items)))
 
-(defun listen-subsonic--flatten-indexes (data)
-  "Get a flat list of artists from DATA, which is JSON returned by the \"getIndexes\" endpoint."
-  (let ((idxs (listen-subsonic--ensure-list (map-nested-elt data '(indexes index)))))
+(defun listen-subsonic--flatten-indexes (json-data)
+  "Flatten the JSON-DATA returned by the \"getIndexes\" endpoint.
+Returns a flat list of artist alists."
+  (let ((idxs (listen-subsonic--ensure-list (map-nested-elt json-data '(indexes index)))))
     (mapcan (lambda (idx)
               (let ((artists (listen-subsonic--ensure-list
                               (alist-get 'artist idx))))
@@ -343,14 +407,23 @@ Should be added to `listen-track-end-functions'."
             idxs)))
 
 (defun listen-subsonic--browse-next-level (level)
-  "Return the next level under LEVEL."
+  "Determines the hierarchical level under LEVEL.
+Returns the keyword symbol for the next level.
+
+Hierarchy is: :root -> :indexes -> :directory."
   (pcase level
     (:root :indexes)
     (:indexes :directory)
     (_ :directory)))
 
 (defun listen-subsonic--browse-get-prefix (item)
-  "Return a fixed-width (15 chars) string of ls-like metadata for ITEM."
+  "Create a fixed-width string of `ls'-like metadata for ITEM.
+Returns a formatted string of length up to 15 characters.
+
+Example returns:
+- Starred song: \"- * 2004 3:43\"
+- Artist: \"d - ---- ----\"
+- Album: \"d - 2004 ----\""
   (let* ((dirp (alist-get 'isDir item))
          (year (alist-get 'year item))
          (duration (alist-get 'duration item))
@@ -365,21 +438,25 @@ Should be added to `listen-track-end-functions'."
 ;;;; Interactive functions
 
 (defun listen-subsonic-ping-server ()
-  "Ping the server to check connectivity and authentication."
+  "Ping the server to check connectivity and authentication.
+Returns nil, only displaying a success or failure message."
   (interactive)
   (if (listen-subsonic--api-call "ping")
       (message "Successfully pinged Subsonic server!")
     (message "Failed to ping server.")))
 
 (defun listen-subsonic--read-playlist ()
-  "Prompt user for a Subsonic playlist and return its ID."
+  "Prompt user to select a Subsonic playlist using `completing-read'.
+Returns the selected playlist's ID as a string."
   (let* ((playlists (listen-subsonic--get-playlists))
          (name (completing-read "Playlist: " playlists nil t)))
     (alist-get name playlists nil nil #'equal)))
 
 (defun listen-subsonic--affixation (hashtable suffix-fn &optional face)
-  "Returns an affixation function for candidates in HASHTABLE.
-SUFFIX-FN returns the actual suffix string from the object found in HASHTABLE.
+  "Create an affixation function for `completing-read' candidates in HASHTABLE.
+Returns an affixation function which maps a list of candidates to a list of suffixes.
+
+SUFFIX-FN returns the suffix string from the object found in HASHTABLE.
 FACE is applied to the suffix."
   (lambda (cands)
     (mapcar (lambda (cand)
@@ -393,29 +470,33 @@ FACE is applied to the suffix."
             cands)))
 
 (defun listen-subsonic--suffix-track (track)
-  "Returns affixation suffix for TRACK."
+  "Return TRACK's album name to be used as an `affixation-function' suffix."
   (listen-track-album track))
 
 (defun listen-subsonic--suffix-playlist (playlist)
-  "Returns affixation suffix for PLAYLIST."
+  "Returns PLAYLIST's song count to be used as an `affixation-function' suffix."
   (concat (number-to-string (or (alist-get 'songCount playlist) 0)) " tracks"))
 
-(defun listen-subsonic--suffix-node (item)
-  "Return affixation suffix for a browser ITEM."
+(defun listen-subsonic--suffix-node (node)
+  "Returns affixation suffix for NODE.
+
+Displays year for directories and albums, and duration for songs."
   (cond
    ;; ".." and "[All]"
-   ((symbolp item) "")
+   ((symbolp node) "")
    ;; album or folder
-   ((alist-get 'isDir item)
-    (if-let ((year (alist-get 'year item)))
+   ((alist-get 'isDir node)
+    (if-let ((year (alist-get 'year node)))
         (number-to-string year)
       ""))
    ;; song
-   (t (listen-format-seconds (or (alist-get 'duration item) 0)))))
+   (t (listen-format-seconds (or (alist-get 'duration node) 0)))))
 
 (defun listen-subsonic--read-track (tracks prompt)
-  "Prompt user with PROMPT for a track from TRACKS.
-Handles duplicate names by appending (n)."
+  "Prompt user to select a track from TRACKS, displaying PROMPT.
+Returns the selected track as a `listen-track'.
+
+Handles duplicate names by appending a counter."
   (let ((track-map (make-hash-table :test 'equal)))
     (dolist (track tracks)
       ;; use "artist - track" as id
@@ -440,7 +521,7 @@ Handles duplicate names by appending (n)."
       (gethash selected-name track-map))))
 
 (defun listen-subsonic-queue-random (n queue)
-  "Fetch and add to QUEUE a list of N random songs."
+  "Fetch N random songs from the server and add them to QUEUE."
   (interactive
    (list
     (read-number "Number of songs: " 10)
@@ -455,21 +536,21 @@ Handles duplicate names by appending (n)."
     (listen-queue-add-tracks tracks queue)))
 
 (defun listen-subsonic-queue-playlist (queue)
-  "Add all tracks from a user's playlist to the QUEUE."
+  "Prompt for a playlist and add its tracks to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
   (let* ((id (listen-subsonic--read-playlist))
          (tracks (listen-subsonic--get-playlist-tracks id)))
     (listen-queue-add-tracks tracks queue)))
 
 (defun listen-subsonic-queue-starred-tracks (queue)
-  "Add all starred songs from Subsonic server to QUEUE."
+  "Fetch all starred tracks and add them to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
   (let ((tracks (listen-subsonic-get-starred-tracks)))
     (listen-queue-add-tracks tracks queue)))
 
 ;; TODO: C-u adds to start of queue/next? Waiting for listen-queue function to enable
 (defun listen-subsonic-queue-search-tracks (query queue)
-  "Search Subsonic server for QUERY and add results to the current QUEUE."
+  "Prompt for a search QUERY, and add its results to the current QUEUE."
   (interactive
    (list (read-string "Search Subsonic: ")
          (listen-queue-complete :allow-new-p t)))
@@ -481,7 +562,8 @@ Handles duplicate names by appending (n)."
     (message "No tracks selected or found.")))
 
 (defun listen-library-from-subsonic (&optional source)
-  "Show a library view for subsonic.
+  "Show a `listen-library' buffer with content from SOURCE.
+
 SOURCE may be one of:
 - \"Browse\": Allows the user to browse a directory tree.
 - \"Starred Tracks\": Library from starred tracks.
@@ -511,7 +593,7 @@ SOURCE may be one of:
                     :name (format "Subsonic: %s" source))))
 
 (defun listen-subsonic-clear-cache ()
-  "Clear the Subsonic cache directory."
+  "Delete the Subsonic cache directory and its contents."
   (interactive)
   (when (file-exists-p listen-subsonic-cache-dir)
     (delete-directory listen-subsonic-cache-dir t))
@@ -520,8 +602,10 @@ SOURCE may be one of:
 ;; Completing read browser
 (defun listen-subsonic-browse-library ()
   "Browse the Subsonic library hierarchy using `completing-read'.
+
 Library hierarchy: Folder -> Artist -> Album -> Song.
-Select the \"[All]\" option to select all tracks under the current level."
+Select the \"[All]\" option to select all tracks under the current level.
+Select the \"..\" option to move up/back in the hierarchy."
   (interactive)
   (let ((result (listen-subsonic--browse-step :root nil "Root")))
     (when result
@@ -532,8 +616,11 @@ Select the \"[All]\" option to select all tracks under the current level."
 ;; TODO: make prompt show full breadcrumbs
 ;; TODO: propertize everything properly
 (defun listen-subsonic--browse-step (level id name &optional history)
-  "Enter LEVEL defined by ID with NAME.
-Backend for `listen-subsonic-browse-library'. HISTORY contains the user's navigation history."
+  "Recursive browser navigation function for `listen-subsonic-browse-library'.
+Returns a list (function name) for the selected action, or nil to go up/back.
+
+LEVEL, ID, and NAME define the current location.
+HISTORY is a stack containint the user's navigation history."
   (let* ((items (listen-subsonic--get-nodes level id))
          (node-map (make-hash-table :test 'equal))
          (next (listen-subsonic--browse-next-level level))
@@ -594,8 +681,11 @@ Backend for `listen-subsonic-browse-library'. HISTORY contains the user's naviga
 
 ;; dired-like browser UI
 (defun listen-subsonic--browse-next-line (&optional n)
-  "Move 1, or N lines up, or if N is a negative number, move down.
-Place the point on the line's button."
+  "Move N lines down in the browser buffer.
+
+Ensures the point is automatically placed on a text-button.
+If N is negative, the point will move up instead.
+If N is nil, the point will move down one line."
   (interactive)
   (line-move (or n 1) t)
   (beginning-of-line)
@@ -603,7 +693,11 @@ Place the point on the line's button."
     (goto-char (match-beginning 0))))
 
 (defun listen-subsonic--browse-prev-line (&optional n)
-  "Move 1, or N lines down, snapping the point to the button on the line."
+  "Move N lines up in the browser buffer.
+
+Ensures the point is automatically placed on a text-button.
+If N is negative, the point will move down instead.
+If N is nil, the point will move up one line."
   (interactive)
   (listen-subsonic--browse-next-line (- 0 (or n 1))))
 
@@ -620,7 +714,7 @@ Place the point on the line's button."
   "Keymap for `listen-subsonic-browse-mode'.")
 
 (define-derived-mode listen-subsonic-browse-mode special-mode "Subsonic-Browser"
-  "Major mode for `dired'-like browsing of Subsonic libraries."
+  "Major mode for browsing Subsonic libraries with a `dired'-like interface."
   :interactive nil
   :keymap listen-subsonic-browse-mode-map
   (setq-local revert-buffer-function #'listen-subsonic--browse-revert
@@ -630,7 +724,9 @@ Place the point on the line's button."
               listen-subsonic--browse-current-level nil))
 
 (defun listen-subsonic-browse ()
-  "Open a `dired'-like Subsonic browser buffer."
+  "Create or switch to the Listen Subsonic Browser buffer.
+
+Interface opens at the :root level, showing the user's available folders."
   (interactive)
   (let ((buf (get-buffer-create "*Listen Subsonic Browser*")))
     (with-current-buffer buf
@@ -640,7 +736,10 @@ Place the point on the line's button."
 
 ;; TODO: When emacs 31.1 is released, cl-decf/cl-incf -> decf/incf
 (defun listen-subsonic--process-art-queue ()
-  "Process background art queue."
+  "Asynchronously process background art queue.
+
+Asynchronous calls to the api use this function as the callback, this function gets called
+recursively until the art queue is empty."
   (while (and listen-subsonic--art-queue
               (< listen-subsonic--art-active listen-subsonic--art-max))
     (cl-incf listen-subsonic--art-active)
@@ -656,7 +755,11 @@ Place the point on the line's button."
                 (listen-subsonic--process-art-queue))))))
 
 (defun listen-subsonic--browse-fetch-art (id buf pos)
-  "Fetch cover art for ID and display it a POS in BUF."
+  "Queue a download for artwork with ID to be displayed at POS in BUF.
+
+If artwork exists in `listen-subsonic-cache-dir', that will be used. Otherwise, art will be
+downloaded.
+Art is asynchronously displayed in the Listen Subsonic Browser buffer as it is downloaded."
   (unless (file-exists-p listen-subsonic-cache-dir)
     (make-directory listen-subsonic-cache-dir))
   (let ((file (expand-file-name (format "%s.jpg" id) listen-subsonic-cache-dir))
@@ -671,7 +774,10 @@ Place the point on the line's button."
       (listen-subsonic--process-art-queue))))
 
 (defun listen-subsonic--display-art (file buf pos)
-  "Display FILE's image in BUF at POS."
+  "Display FILE's image in BUF at POS.
+
+Used as the callback function for asynchronous art downloads in
+`listen-subsonic--process-art-queue'."
   (when (buffer-live-p buf)
     (with-current-buffer buf
       (with-silent-modifications
@@ -682,7 +788,10 @@ Place the point on the line's button."
 
 ;; Render the "dired" buffer
 (defun listen-subsonic--browse-insert-item (item next)
-  "Insert a single ITEM with link to NEXT level into the listen browser buffer."
+  "Insert a formatted line for ITEM into the current buffer.
+Returns a list (art-id buffer pos) for asynchronous artwork downloads.
+
+NEXT determines the level the ITEM will link to."
   (let* ((dirp (alist-get 'isDir item))
          (name (alist-get 'name item))
          (prefix (listen-subsonic--browse-get-prefix item))
@@ -708,7 +817,9 @@ Place the point on the line's button."
           (+ pt (length prefix)))))
 
 (defun listen-subsonic--browse-render (id name level)
-  "Display a view for LEVEL (folder/artist/album) of ID and NAME."
+  "Render the browser buffer for hierarchy LEVEL and ID with NAME.
+
+Inserts a header, navigation buttons and the list of items."
   (setq-local listen-subsonic--browse-current-id id
               listen-subsonic--browse-current-name name
               listen-subsonic--browse-current-level level)
@@ -747,7 +858,7 @@ Place the point on the line's button."
 ;; browser functions
 
 (defun listen-subsonic--browse-add-all ()
-  "Add all tracks in/under the current view to the current queue."
+  "Fetch all tracks in/under the current view and add them to the current queue."
   (interactive)
   (let ((tracks (pcase listen-subsonic--browse-current-level
                   (:indexes
@@ -763,8 +874,9 @@ Place the point on the line's button."
 
 (defun listen-subsonic--browse-button (&optional button)
   "Activate the text BUTTON at point.
-If button at point is a directory, it will enter and redisplay the buffer.
-If button at point is a song, it will add it to the current queue."
+
+If button at point is a directory, render the next level.
+If button at point is a track, add it to the current queue."
   (interactive)
   (let* ((pt (if button (button-start button) (point)))
          (item (get-text-property pt 'subsonic-item))
@@ -789,14 +901,18 @@ If button at point is a song, it will add it to the current queue."
       (message "Added '%s' to queue." (alist-get 'title item)))))
 
 (defun listen-subsonic--browse-up ()
-  "Go up a level in the Subsonic directory structure."
+  "Navigate to the parent directory in the browser history.
+
+Pops the previous state from `listen-subsonic--browse-history'."
   (interactive)
   (if-let ((prev (pop listen-subsonic--browse-history)))
       (listen-subsonic--browse-render (nth 0 prev) (nth 1 prev) (nth 2 prev))
     (message "This is the highest level.")))
 
 (defun listen-subsonic--browse-revert (_ignore-auto _noconfirm)
-  "Custom revert function for Listen-Browser buffers."
+  "Reload the current browser view.
+
+Re fetches data for the current ID and level from the API."
   (listen-subsonic--browse-render listen-subsonic--browse-current-id
                                   listen-subsonic--browse-current-name
                                   listen-subsonic--browse-current-level))
