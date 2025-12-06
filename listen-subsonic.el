@@ -506,7 +506,6 @@ SOURCE may be one of:
   (message "Cleared Subsonic cache."))
 
 ;; Completing read browser
-;; TODO: Ensure that ".." and "[All]" are always on the top
 (defun listen-subsonic-browse-library ()
   "Browse the Subsonic library hierarchy using `completing-read'.
 Library hierarchy: Folder -> Artist -> Album -> Song.
@@ -529,10 +528,15 @@ Backend for `listen-subsonic-browse-library'. HISTORY contains the user's naviga
                      ;; When theres history, add an up option
                      (when history
                        '((".." . :up)))
-                     ;; Dont show "All" for root (too much)
+                     ;; Dont show "All" for root
                      (unless (eq level :root)
                        '(("[All]" . :this)))
                      candidates))
+           ;; ensure ".." and "[All]" are at the top
+           ;; subsonic return is already sorted
+           (completion-extra-properties
+            '(:display-sort-function identity
+              :cycle-sort-functions identity))
            (sel-name (completing-read prompt (mapcar #'car choices) nil t))
            (selection (cdr (assoc sel-name choices))))
       (cond
