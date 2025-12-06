@@ -3,6 +3,7 @@
 ;; Copyright (C) 2025  Free Software Foundation, Inc.
 
 ;; Author: Kai Bagley <kaibagley@proton.mail>
+;; Maintainer: Kai Bagley <kaibagley@proton.mail>
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -533,6 +534,7 @@ Backend for `listen-subsonic-browse-library'. HISTORY contains the user's naviga
               listen-subsonic--browse-current-name nil
               listen-subsonic--browse-current-level nil))
 
+;; TODO: Restrict point to NOT enter prefix (similar to dired)
 (defun listen-subsonic-browse ()
   "Open a `dired'-like Subsonic browser buffer."
   (interactive)
@@ -542,20 +544,21 @@ Backend for `listen-subsonic-browse-library'. HISTORY contains the user's naviga
       (listen-subsonic--browse-render nil "Root" :root)) ;; Start at :root
     (switch-to-buffer buf)))
 
+;; TODO: cl-decf and cl-incf are built-in in emacs 31.1 (decf and incf)
 (defun listen-subsonic--process-art-queue ()
   "Process background art queue."
   (while (and listen-subsonic--art-queue
               (< listen-subsonic--art-active listen-subsonic--art-max))
-    (setq listen-subsonic--art-active (1+ listen-subsonic--art-active))
+    (cl-incf listen-subsonic--art-active)
     (pcase-let ((`(,url ,file ,buf ,pos) (pop listen-subsonic--art-queue)))
       (plz 'get url
         :as `(file ,file)
         :then (lambda (_)
-                (setq listen-subsonic--art-active (1- listen-subsonic--art-active))
+                (cl-decf listen-subsonic--art-active)
                 (listen-subsonic--display-art file buf pos)
                 (listen-subsonic--process-art-queue))
         :else (lambda (_)
-                (setq listen-subsonic--art-active (1- listen-subsonic--art-active))
+                (cl-decf listen-subsonic--art-active)
                 (listen-subsonic--process-art-queue))))))
 
 (defun listen-subsonic--browse-fetch-art (id buf pos)
