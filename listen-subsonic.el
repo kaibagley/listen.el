@@ -205,8 +205,6 @@ PARAMS are optional API parameters."
          (items (alist-get itemkey root)))
     (listen-subsonic--ensure-list items)))
 
-;; TODO: Look into consult's async features at some
-;; stage? Maybe not necessary but will allow searching way more than 50
 (defun listen-subsonic-search-tracks (query)
   "Return a list of `listen-track' objects.
 Uses the Subsonic API's \"search3\" endpoint with QUERY as the search query.
@@ -379,10 +377,45 @@ Should be added to `listen-track-end-functions'."
          (name (completing-read "Playlist: " playlists nil t)))
     (alist-get name playlists nil nil #'equal)))
 
-;; TODO: Decide if this is good or bad, this took way too long to figure out and seems ugly
+(defun listen-subsonic--affixation (hashtable suffix-fn &optional face)
+  "Returns an affixation function for candidates in HASHTABLE.
+SUFFIX-FN returns the actual suffix string from the object found in HASHTABLE.
+FACE is applied to the suffix."
+  (lambda (cands)
+    (mapcar (lambda (cand)
+              (let* ((item (gethash cand hashtable))
+                     (len (string-width cand))
+                     (padding (make-string (max 5 (- 40 len)) ?\s))
+                     (suffix (or (funcall suffix-fn item) "")))
+                (list cand
+                      ""
+                      (concat padding (propertize suffix 'face face)))))
+            cands)))
+
+(defun listen-subsonic--suffix-track (track)
+  "Returns affixation suffix for TRACK."
+  (listen-track-album track))
+
+(defun listen-subsonic--suffix-playlist (playlist)
+  "Returns affixation suffix for PLAYLIST."
+  (concat (number-to-string (or (alist-get 'songCount playlist) 0)) " tracks"))
+
+(defun listen-subsonic--suffix-node (item)
+  "Return affixation suffix for a browser ITEM."
+  (cond
+   ;; ".." and "[All]"
+   ((symbolp item) "")
+   ;; album or folder
+   ((alist-get 'isDir item)
+    (if-let ((year (alist-get 'year item)))
+        (number-to-string year)
+      ""))
+   ;; song
+   (t (listen-format-seconds (or (alist-get 'duration item) 0)))))
+
 (defun listen-subsonic--read-track (tracks prompt)
   "Prompt user with PROMPT for a track from TRACKS.
-Handles duplicate names by appending (n), and adds album using an affixation function."
+Handles duplicate names by appending (n)."
   (let ((track-map (make-hash-table :test 'equal)))
     (dolist (track tracks)
       ;; use "artist - track" as id
@@ -398,20 +431,11 @@ Handles duplicate names by appending (n), and adds album using an affixation fun
                              artist-track
                              (propertize (format "(%d)" count) 'face 'shadow))))
         (puthash name track track-map)))
-    ;; affixation-function is cursed, am i doing this right?
-    (let* ((affix-fn
-            (lambda (cands)
-              (mapcar (lambda (cand)
-                        (let* ((track (gethash cand track-map))
-                               (len (string-width cand))
-                               (padding (make-string (max 5 (- 40 len)) ?\s))
-                               (suffix (format "%s%s"
-                                               padding
-                                               (propertize (listen-track-album track)
-                                                           'face 'listen-album))))
-                          (list cand "" suffix)))
-                      cands)))
-           (completion-extra-properties `(:affixation-function ,affix-fn))
+    (let* ((completion-extra-properties
+            `(:affixation-function
+              ,(listen-subsonic--affixation track-map
+                                            #'listen-subsonic--suffix-track
+                                            'listen-album)))
            (selected-name (completing-read prompt track-map nil t)))
       (gethash selected-name track-map))))
 
@@ -505,48 +529,65 @@ Select the \"[All]\" option to select all tracks under the current level."
           (listen-library (nth 0 result) :name (nth 1 result))
         (funcall (nth 0 result))))))
 
+;; TODO: make prompt show full breadcrumbs
+;; TODO: propertize everything properly
 (defun listen-subsonic--browse-step (level id name &optional history)
   "Enter LEVEL defined by ID with NAME.
 Backend for `listen-subsonic-browse-library'. HISTORY contains the user's navigation history."
   (let* ((items (listen-subsonic--get-nodes level id))
-         (candidates (mapcar (lambda (item) (cons (alist-get 'name item) item)) items))
+         (node-map (make-hash-table :test 'equal))
          (next (listen-subsonic--browse-next-level level))
          (prompt (if (eq level :root) "Library: " (format "%s: " name))))
-    (let* ((choices (append
-                     ;; When theres history, add an up option
-                     (when history
-                       '((".." . :up)))
-                     ;; Dont show "All" for root
-                     (unless (eq level :root)
-                       '(("[All]" . :this)))
-                     candidates))
-           ;; ensure ".." and "[All]" are at the top
-           ;; subsonic return is already sorted
-           (completion-extra-properties
-            '(:display-sort-function identity
+
+    ;; When theres history, add an up option
+    (when history
+      (puthash (propertize ".." 'face 'shadow) :up node-map))
+
+    ;; Dont show "All" for root
+    (unless (eq level :root)
+      (puthash (propertize "[All]" 'face 'shadow) :this node-map))
+
+    ;; Prepare candidates
+    (dolist (item items)
+      (let* ((node-name (alist-get 'name item))
+             (disp-name node-name)
+             (count 1))
+        (while (gethash disp-name node-map)
+          (cl-incf count)
+          (setq disp-name (format "%s (%d)" node-name count)))
+        (puthash disp-name item node-map)))
+
+    ;; ensure ".." and "[All]" are at the top
+    ;; subsonic return is already sorted
+    (let* ((completion-extra-properties
+            `(:affixation-function ,(listen-subsonic--affixation
+                                     node-map
+                                     #'listen-subsonic--suffix-node
+                                     'completion-annotations)
+              :display-sort-function identity
               :cycle-sort-functions identity))
-           (sel-name (completing-read prompt (mapcar #'car choices) nil t))
-           (selection (cdr (assoc sel-name choices))))
+           (sel-name (completing-read prompt node-map nil t))
+           (selection (gethash sel-name node-map)))
+
+      ;; Handle user selection
       (cond
-       ;; User selected ".."
+       ;; ".."
        ((eq selection :up)
         (apply #'listen-subsonic--browse-step (car history))) ; Latest history
-       ;; User selected All
+       ;; "[All]"
        ((eq selection :this)
         (list (lambda ()
                 (pcase level
-                  (:indexes
-                   (listen-subsonic--get-folder-tracks id))
-                  (_
-                   (listen-subsonic--get-all-tracks id))))
+                  (:indexes (listen-subsonic--get-folder-tracks id))
+                  (_ (listen-subsonic--get-all-tracks id))))
               (format "Subsonic: %s" name)))
-       ;; Descending a level
+       ;; Folder/artist/album
        ((and (alist-get 'isDir selection))
         (listen-subsonic--browse-step next
                                       (alist-get 'id selection)
                                       sel-name
                                       (cons (list level id name history) history))) ; Add history
-       ;; Song/bottom level
+       ;; Song
        (t
         (list (lambda () (list (listen-subsonic--json-to-listen selection)))
               (format "Subsonic: %s" sel-name)))))))
