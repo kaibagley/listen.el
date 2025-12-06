@@ -57,7 +57,7 @@ Must be either \"http\" or \"https\""
                  (const :tag "HTTP" "http"))
   :group 'listen-subsonic)
 
-(defcustom listen-subsonic-search-max-results 50
+(defcustom listen-subsonic-search-max-results 200
   "Maximum results to return in search queries.
 Must be a string."
   :type 'string
@@ -372,6 +372,51 @@ Should be added to `listen-track-end-functions'."
       (message "Successfully pinged Subsonic server!")
     (message "Failed to ping server.")))
 
+(defun listen-subsonic--read-playlist ()
+  "Prompt user for a Subsonic playlist and return its ID."
+  (let* ((playlists (listen-subsonic--get-playlists))
+         (name (completing-read "Playlist: " playlists nil t)))
+    (alist-get name playlists nil nil #'equal)))
+
+;; TODO: Decide if this is good or bad, this took way too long to figure out and seems ugly
+(defun listen-subsonic--read-track (tracks prompt)
+  "Prompt user with PROMPT for a track from TRACKS.
+Handles duplicate names by appending (n), and adds album using an affixation function."
+  (let ((track-map (make-hash-table :test 'equal)))
+    (dolist (track tracks)
+      ;; use "artist - track" as id
+      (let* ((artist-track (format "%s - %s"
+                                   (propertize (listen-track-artist track)
+                                               'face 'listen-artist)
+                                   (propertize (listen-track-title track)
+                                               'face 'listen-title)))
+             (name artist-track)
+             (count 1))
+        ;; add number to duplicates
+        (while (gethash name track-map)
+          (cl-incf count)
+          (setq name (format "%s %s"
+                             artist-track
+                             (propertize (format "(%d)" count)
+                                         'face 'shadow))))
+        (puthash name track track-map)))
+    ;; affixation-function is cursed, am i doing this right?
+    (let* ((affix-fn
+            (lambda (cands)
+              (mapcar (lambda (cand)
+                        (let* ((track (gethash cand track-map))
+                               (len (string-width cand))
+                               (padding (make-string (max 5 (- 40 len)) ?\s))
+                               (suffix (format "%s%s"
+                                               padding
+                                               (propertize (listen-track-album track)
+                                                           'face 'listen-album))))
+                          (list cand "" suffix)))
+                      cands)))
+           (completion-extra-properties `(:affixation-function ,affix-fn))
+           (selected-name (completing-read prompt track-map nil t)))
+      (gethash selected-name track-map))))
+
 (defun listen-subsonic--queue-tracks (tracks queue)
   "Add TRACKS to QUEUE with a message."
   (if tracks
@@ -397,12 +442,6 @@ Should be added to `listen-track-end-functions'."
                          items)))
     (listen-subsonic--queue-tracks tracks queue)))
 
-(defun listen-subsonic--read-playlist ()
-  "Prompt user for a Subsonic playlist and return its ID."
-  (let* ((playlists (listen-subsonic--get-playlists))
-         (name (completing-read "Playlist: " playlists nil t)))
-    (alist-get name playlists nil nil #'equal)))
-
 (defun listen-subsonic-queue-playlist (queue)
   "Add all tracks from a user's playlist to the QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
@@ -423,49 +462,11 @@ Should be added to `listen-track-end-functions'."
    (list (read-string "Search Subsonic: ")
          (listen-queue-complete :allow-new-p t)))
   (let* ((tracks (listen-subsonic-search-tracks query))
-         (track-map (make-hash-table :test 'equal))
-         (candidates
-          (mapcar
-           (lambda (track)
-             ;; use "artist - track" as id
-             (let* ((artist-track (format "%s - %s"
-                                       (propertize (listen-track-artist track)
-                                                   'face 'listen-artist)
-                                       (propertize (listen-track-title track)
-                                                   'face 'listen-title)))
-                    (name artist-track)
-                    (count 1))
-               ;; add number to duplicates
-               (while (gethash name track-map)
-                 (cl-incf count)
-                 (setq name (format "%s %s"
-                                    artist-track
-                                    (propertize (format "(%d)" count)
-                                                'face 'shadow))))
-               (puthash name track track-map)
-               name))
-           tracks)))
-    (when candidates
-      ;; affixation-function is cursed, am i doing this right?
-      (let* ((affix-fn
-              (lambda (cands)
-                (mapcar (lambda (cand)
-                          (let* ((track (gethash cand track-map))
-                                 (len (string-width cand))
-                                 (padding (make-string (max 5 (- 40 len)) ?\s))
-                                 (suffix (format "%s%s"
-                                                 padding
-                                                 (propertize (listen-track-album track)
-                                                             'face 'listen-album))))
-                            (list cand "" suffix)))
-                        cands)))
-             (selected-name
-              (let ((completion-extra-properties
-                     `(:affixation-function ,affix-fn)))
-                (completing-read "Select track: " candidates nil t)))
-             (selected-track (gethash selected-name track-map)))
-        (listen-queue-add-tracks (list selected-track) queue)
-        (message "Added '%s' to queue." (listen-track-title selected-tracks))))))
+         (track (listen-subsonic--read-track tracks "Select track: ")))
+    (progn
+      (listen-queue-add-tracks (list track) queue)
+      (message "Added '%s' to queue." (listen-track-title track)))
+    (message "No tracks selected or found.")))
 
 (defun listen-library-from-subsonic (&optional source)
   "Show a library view for subsonic.
