@@ -68,9 +68,6 @@ Must be a string."
 (defvar listen-subsonic-cache-dir (expand-file-name "listen.el" temporary-file-directory)
   "Directory to store cached subsonic data.")
 
-(defvar listen-subsonic--auth-cache nil
-  "Cache for auth parameters to avoid recomputation.")
-
 (defvar listen-subsonic--art-queue nil
   "Queue for art downloads in browser.")
 
@@ -90,18 +87,17 @@ Must be a string."
 
 (defun listen-subsonic--get-auth-params ()
   "Return auth info alist for API calls."
-  (or listen-subsonic--auth-cache
-      (let* ((creds (listen-subsonic--get-credentials))
-             (user (plist-get creds :user))
-             (pass (funcall (plist-get creds :secret)))
-             (salt (format "%06x" (random #xffffff)))
-             (token (md5 (concat pass salt))))
-        `(("u" . ,user)
-          ("t" . ,token)
-          ("s" . ,salt)
-          ("v" . "1.16.1")
-          ("c" . ,listen-subsonic-user-agent)
-          ("f" . "json")))))
+  (let* ((creds (listen-subsonic--get-credentials))
+         (user (plist-get creds :user))
+         (pass (funcall (plist-get creds :secret)))
+         (salt (format "%06x" (random #xffffff)))
+         (token (md5 (concat pass salt))))
+    `(("u" . ,user)
+      ("t" . ,token)
+      ("s" . ,salt)
+      ("v" . "1.16.1")
+      ("c" . ,listen-subsonic-user-agent)
+      ("f" . "json"))))
 
 ;; TODO: Maybe allow insecure http later?
 (defun listen-subsonic--build-url (endpoint params)
