@@ -212,10 +212,10 @@ The maximum returned tracks is 50."
   (let ((items (listen-subsonic--get-items
                 "search3" 'searchResult3 'song
                 `(("query" . ,query)
-                  ("songCount" . ,listen-subsonic-search-max-results))))
+                  ("songCount" . ,(number-to-string listen-subsonic-search-max-results)))))
         (auth (listen-subsonic--get-auth-params)))
     (mapcar (lambda (item)
-              (listen-subsonic--json-to-listen items auth))
+              (listen-subsonic--json-to-listen item auth))
             items)))
 
 (defun listen-subsonic-get-starred-tracks ()
@@ -224,7 +224,7 @@ The maximum returned tracks is 50."
                 "getStarred" 'starred 'song))
         (auth (listen-subsonic--get-auth-params)))
     (mapcar (lambda (item)
-              (listen-subsonic--json-to-listen items auth))
+              (listen-subsonic--json-to-listen item auth))
             items)))
 
 (defun listen-subsonic--get-playlists ()
@@ -243,7 +243,7 @@ The maximum returned tracks is 50."
                 `(("id" . ,playlist))))
         (auth (listen-subsonic--get-auth-params)))
     (mapcar (lambda (item)
-              (listen-subsonic--json-to-listen items auth))
+              (listen-subsonic--json-to-listen item auth))
             items)))
 
 ;; TODO: merge this with get-folder-tracks to simplify browse code
@@ -268,7 +268,7 @@ The maximum returned tracks is 50."
                   ("songCount" . "100000"))))
         (auth (listen-subsonic--get-auth-params)))
     (mapcar (lambda (item)
-              (listen-subsonic--json-to-listen items auth))
+              (listen-subsonic--json-to-listen item auth))
             items)))
 
 ;;;; Write requests
