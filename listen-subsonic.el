@@ -406,7 +406,7 @@ Returns a flat list of artist alists."
                 (mapcar (lambda (a) (cons '(isDir . t) a)) artists)))
             idxs)))
 
-(defun listen-subsonic--browse-next-level (level)
+(defun listen-subsonic--browser-next-level (level)
   "Determines the hierarchical level under LEVEL.
 Returns the keyword symbol for the next level.
 
@@ -416,7 +416,7 @@ Hierarchy is: :root -> :indexes -> :directory."
     (:indexes :directory)
     (_ :directory)))
 
-(defun listen-subsonic--browse-get-prefix (item)
+(defun listen-subsonic--dired-get-prefix (item)
   "Create a fixed-width string of `ls'-like metadata for ITEM.
 Returns a formatted string of length up to 15 characters.
 
@@ -581,7 +581,7 @@ SOURCE may be one of:
            ("Starred Tracks"
             (lambda () (listen-subsonic-get-starred-tracks)))
            ("Browse"
-            (lambda () (listen-subsonic-browse-library)))
+            (lambda () (listen-subsonic-find)))
            ("Playlist"
             (lambda ()
               (listen-subsonic--get-playlist-tracks (listen-subsonic--read-playlist))))
@@ -600,14 +600,15 @@ SOURCE may be one of:
   (message "Cleared Subsonic cache."))
 
 ;; Completing read browser
-(defun listen-subsonic-browse-library ()
+;; TODO: unify the logic used by the minibuffer browser and the buffer browser
+(defun listen-subsonic-find ()
   "Browse the Subsonic library hierarchy using `completing-read'.
 
 Library hierarchy: Folder -> Artist -> Album -> Song.
 Select the \"[All]\" option to select all tracks under the current level.
 Select the \"..\" option to move up/back in the hierarchy."
   (interactive)
-  (let ((result (listen-subsonic--browse-step :root nil "Root")))
+  (let ((result (listen-subsonic--find-step :root nil "Root")))
     (when result
       (if (called-interactively-p 'interactive)
           (listen-library (nth 0 result) :name (nth 1 result))
@@ -615,15 +616,15 @@ Select the \"..\" option to move up/back in the hierarchy."
 
 ;; TODO: make prompt show full breadcrumbs
 ;; TODO: propertize everything properly
-(defun listen-subsonic--browse-step (level id name &optional history)
-  "Recursive browser navigation function for `listen-subsonic-browse-library'.
+(defun listen-subsonic--find-step (level id name &optional history)
+  "Recursive browser navigation function for `listen-subsonic-find'.
 Returns a list (function name) for the selected action, or nil to go up/back.
 
 LEVEL, ID, and NAME define the current location.
 HISTORY is a stack containint the user's navigation history."
   (let* ((items (listen-subsonic--get-nodes level id))
          (node-map (make-hash-table :test 'equal))
-         (next (listen-subsonic--browse-next-level level))
+         (next (listen-subsonic--browser-next-level level))
          (prompt (if (eq level :root) "Library: " (format "%s: " name))))
 
     ;; When theres history, add an up option
@@ -660,7 +661,7 @@ HISTORY is a stack containint the user's navigation history."
       (cond
        ;; ".."
        ((eq selection :up)
-        (apply #'listen-subsonic--browse-step (car history))) ; Latest history
+        (apply #'listen-subsonic--find-step (car history))) ; Latest history
        ;; "[All]"
        ((eq selection :this)
         (list (lambda ()
@@ -670,7 +671,7 @@ HISTORY is a stack containint the user's navigation history."
               (format "Subsonic: %s" name)))
        ;; Folder/artist/album
        ((and (alist-get 'isDir selection))
-        (listen-subsonic--browse-step next
+        (listen-subsonic--find-step next
                                       (alist-get 'id selection)
                                       sel-name
                                       (cons (list level id name history) history))) ; Add history
@@ -680,7 +681,7 @@ HISTORY is a stack containint the user's navigation history."
               (format "Subsonic: %s" sel-name)))))))
 
 ;; dired-like browser UI
-(defun listen-subsonic--browse-next-line (&optional n)
+(defun listen-subsonic--dired-next-line (&optional n)
   "Move N lines down in the browser buffer.
 
 Ensures the point is automatically placed on a text-button.
@@ -692,46 +693,46 @@ If N is nil, the point will move down one line."
   (when (re-search-forward "[📁🎵] " (line-end-position) t)
     (goto-char (match-beginning 0))))
 
-(defun listen-subsonic--browse-prev-line (&optional n)
+(defun listen-subsonic--dired-prev-line (&optional n)
   "Move N lines up in the browser buffer.
 
 Ensures the point is automatically placed on a text-button.
 If N is negative, the point will move down instead.
 If N is nil, the point will move up one line."
   (interactive)
-  (listen-subsonic--browse-next-line (- 0 (or n 1))))
+  (listen-subsonic--dired-next-line (- 0 (or n 1))))
 
-(defvar listen-subsonic-browse-mode-map
+(defvar listen-subsonic-dired-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "^") #'listen-subsonic--browse-up)
+    (define-key map (kbd "^") #'listen-subsonic--dired-up)
     (define-key map (kbd "g") #'revert-buffer)
-    (define-key map (kbd "A") #'listen-subsonic--browse-add-all)
-    (define-key map (kbd "n") #'listen-subsonic--browse-next-line)
-    (define-key map (kbd "p") #'listen-subsonic--browse-prev-line)
-    (define-key map [remap next-line] #'listen-subsonic--browse-next-line)
-    (define-key map [remap previous-line] #'listen-subsonic--browse-prev-line)
+    (define-key map (kbd "A") #'listen-subsonic--dired-add-all)
+    (define-key map (kbd "n") #'listen-subsonic--dired-next-line)
+    (define-key map (kbd "p") #'listen-subsonic--dired-prev-line)
+    (define-key map [remap next-line] #'listen-subsonic--dired-next-line)
+    (define-key map [remap previous-line] #'listen-subsonic--dired-prev-line)
     map)
-  "Keymap for `listen-subsonic-browse-mode'.")
+  "Keymap for `listen-subsonic-dired-mode'.")
 
-(define-derived-mode listen-subsonic-browse-mode special-mode "Subsonic-Browser"
+(define-derived-mode listen-subsonic-dired-mode special-mode "Subsonic-Dired"
   "Major mode for browsing Subsonic libraries with a `dired'-like interface."
   :interactive nil
-  :keymap listen-subsonic-browse-mode-map
-  (setq-local revert-buffer-function #'listen-subsonic--browse-revert
-              listen-subsonic--browse-history nil
-              listen-subsonic--browse-current-id nil
-              listen-subsonic--browse-current-name nil
-              listen-subsonic--browse-current-level nil))
+  :keymap listen-subsonic-dired-mode-map
+  (setq-local revert-buffer-function #'listen-subsonic--dired-revert
+              listen-subsonic--dired-history nil
+              listen-subsonic--dired-current-id nil
+              listen-subsonic--dired-current-name nil
+              listen-subsonic--dired-current-level nil))
 
-(defun listen-subsonic-browse ()
-  "Create or switch to the Listen Subsonic Browser buffer.
+(defun listen-subsonic-dired ()
+  "Create or switch to the Listen Subsonic Dired buffer.
 
 Interface opens at the :root level, showing the user's available folders."
   (interactive)
-  (let ((buf (get-buffer-create "*Listen Subsonic Browser*")))
+  (let ((buf (get-buffer-create "*Listen Subsonic Dired*")))
     (with-current-buffer buf
-      (listen-subsonic-browse-mode)
-      (listen-subsonic--browse-render nil "Root" :root)) ;; Start at :root
+      (listen-subsonic-dired-mode)
+      (listen-subsonic--dired-render nil "Root" :root)) ;; Start at :root
     (switch-to-buffer buf)))
 
 ;; TODO: When emacs 31.1 is released, cl-decf/cl-incf -> decf/incf
@@ -754,12 +755,12 @@ recursively until the art queue is empty."
                 (cl-decf listen-subsonic--art-active)
                 (listen-subsonic--process-art-queue))))))
 
-(defun listen-subsonic--browse-fetch-art (id buf pos)
+(defun listen-subsonic--dired-fetch-art (id buf pos)
   "Queue a download for artwork with ID to be displayed at POS in BUF.
 
 If artwork exists in `listen-subsonic-cache-dir', that will be used. Otherwise, art will be
 downloaded.
-Art is asynchronously displayed in the Listen Subsonic Browser buffer as it is downloaded."
+Art is asynchronously displayed in the Listen Subsonic Dired buffer as it is downloaded."
   (unless (file-exists-p listen-subsonic-cache-dir)
     (make-directory listen-subsonic-cache-dir))
   (let ((file (expand-file-name (format "%s.jpg" id) listen-subsonic-cache-dir))
@@ -782,22 +783,22 @@ Used as the callback function for asynchronous art downloads in
     (with-current-buffer buf
       (with-silent-modifications
         (let ((image (create-image file nil nil
-                                  :ascent 'center
-                                  :height 64)))
+                                   :ascent 'center
+                                   :height 64)))
           (put-text-property pos (1+ pos) 'display image))))))
 
 ;; Render the "dired" buffer
-(defun listen-subsonic--browse-insert-item (item next)
+(defun listen-subsonic--dired-insert-item (item next)
   "Insert a formatted line for ITEM into the current buffer.
 Returns a list (art-id buffer pos) for asynchronous artwork downloads.
 
 NEXT determines the level the ITEM will link to."
   (let* ((dirp (alist-get 'isDir item))
          (name (alist-get 'name item))
-         (prefix (listen-subsonic--browse-get-prefix item))
+         (prefix (listen-subsonic--dired-get-prefix item))
          (pt (point))
          (face (if dirp
-                   (pcase listen-subsonic--browse-current-level
+                   (pcase listen-subsonic--dired-current-level
                      (:root 'listen-genre)
                      (:indexes 'listen-artist)
                      (t 'listen-album))
@@ -805,7 +806,7 @@ NEXT determines the level the ITEM will link to."
     (insert (propertize prefix 'face 'shadow))
     (insert-text-button
      (concat (if dirp "📁 " "🎵 ") name)
-     'action #'listen-subsonic--browse-button
+     'action #'listen-subsonic--dired-button
      'follow-link t
      'subsonic-item item
      'subsonic-next (if dirp next nil)
@@ -816,21 +817,21 @@ NEXT determines the level the ITEM will link to."
           (current-buffer)
           (+ pt (length prefix)))))
 
-(defun listen-subsonic--browse-render (id name level)
-  "Render the browser buffer for hierarchy LEVEL and ID with NAME.
+(defun listen-subsonic--dired-render (id name level)
+  "Render the Dired-like browser buffer for hierarchy LEVEL and ID with NAME.
 
 Inserts a header, navigation buttons and the list of items."
-  (setq-local listen-subsonic--browse-current-id id
-              listen-subsonic--browse-current-name name
-              listen-subsonic--browse-current-level level)
+  (setq-local listen-subsonic--dired-current-id id
+              listen-subsonic--dired-current-name name
+              listen-subsonic--dired-current-level level)
   (let* ((inhibit-read-only t)
          (items (listen-subsonic--get-nodes level id))
-         (next (listen-subsonic--browse-next-level level)))
+         (next (listen-subsonic--browser-next-level level)))
 
     ;; prepare buffer
     (erase-buffer)
     ;; "path" of current level
-    (let* ((parents (mapcar (lambda (h) (nth 1 h)) listen-subsonic--browse-history))
+    (let* ((parents (mapcar (lambda (h) (nth 1 h)) listen-subsonic--dired-history))
            (path (reverse (cons name parents))))
       (insert (propertize (string-join path " / ") 'face 'dired-header) "\n"))
     ;; "." to revert buffer/refresh
@@ -840,31 +841,31 @@ Inserts a header, navigation buttons and the list of items."
                         'follow-link t
                         'face 'dired-directory)
     (insert "\n")
-    (when listen-subsonic--browse-history
+    (when listen-subsonic--dired-history
       (insert-text-button ".."
-                          'action (lambda (_) (listen-subsonic--browse-up))
+                          'action (lambda (_) (listen-subsonic--dired-up))
                           'follow-link t
                           'face 'dired-directory)
       (insert "\n"))
-    (let ((next (listen-subsonic--browse-next-level level)))
+    (let ((next (listen-subsonic--browser-next-level level)))
       (dolist (item (listen-subsonic--get-nodes level id))
         (pcase-let ((`(,art-id ,buf ,pos)
-                     (listen-subsonic--browse-insert-item item next)))
+                     (listen-subsonic--dired-insert-item item next)))
           (when (and art-id (not (memq level '(:root :indexes))))
-            (listen-subsonic--browse-fetch-art art-id buf pos)))))
+            (listen-subsonic--dired-fetch-art art-id buf pos)))))
     (beginning-of-buffer)
-    (listen-subsonic--browse-next-line)))
+    (listen-subsonic--dired-next-line)))
 
 ;; browser functions
 
-(defun listen-subsonic--browse-add-all ()
+(defun listen-subsonic--dired-add-all ()
   "Fetch all tracks in/under the current view and add them to the current queue."
   (interactive)
-  (let ((tracks (pcase listen-subsonic--browse-current-level
+  (let ((tracks (pcase listen-subsonic--dired-current-level
                   (:indexes
-                   (listen-subsonic--get-folder-tracks listen-subsonic--browse-current-id))
+                   (listen-subsonic--get-folder-tracks listen-subsonic--dired-current-id))
                   (:directory
-                   (listen-subsonic--get-all-tracks listen-subsonic--browse-current-id))
+                   (listen-subsonic--get-all-tracks listen-subsonic--dired-current-id))
                   (_
                    (user-error "Cannot add all tracks under the current view or the root level")))))
     (when tracks
@@ -872,7 +873,7 @@ Inserts a header, navigation buttons and the list of items."
       (message "Added %d tracks to the queue." (length tracks)))
     (message "No tracks found.")))
 
-(defun listen-subsonic--browse-button (&optional button)
+(defun listen-subsonic--dired-button (&optional button)
   "Activate the text BUTTON at point.
 
 If button at point is a directory, render the next level.
@@ -887,35 +888,35 @@ If button at point is a track, add it to the current queue."
     (if (alist-get 'isDir item)
         (progn
           ;; add current state to history
-          (push (list listen-subsonic--browse-current-id
-                      listen-subsonic--browse-current-name
-                      listen-subsonic--browse-current-level)
-                listen-subsonic--browse-history)
+          (push (list listen-subsonic--dired-current-id
+                      listen-subsonic--dired-current-name
+                      listen-subsonic--dired-current-level)
+                listen-subsonic--dired-history)
           ;; display next level
-          (listen-subsonic--browse-render (alist-get 'id item)
-                                          (or (alist-get 'title item) (alist-get 'name item))
-                                          next))
+          (listen-subsonic--dired-render (alist-get 'id item)
+                                         (or (alist-get 'title item) (alist-get 'name item))
+                                         next))
       ;; song
       (listen-queue-add-tracks (list (listen-subsonic--json-to-listen item))
                                (listen-queue-complete))
       (message "Added '%s' to queue." (alist-get 'title item)))))
 
-(defun listen-subsonic--browse-up ()
+(defun listen-subsonic--dired-up ()
   "Navigate to the parent directory in the browser history.
 
-Pops the previous state from `listen-subsonic--browse-history'."
+Pops the previous state from `listen-subsonic--dired-history'."
   (interactive)
-  (if-let ((prev (pop listen-subsonic--browse-history)))
-      (listen-subsonic--browse-render (nth 0 prev) (nth 1 prev) (nth 2 prev))
+  (if-let ((prev (pop listen-subsonic--dired-history)))
+      (listen-subsonic--dired-render (nth 0 prev) (nth 1 prev) (nth 2 prev))
     (message "This is the highest level.")))
 
-(defun listen-subsonic--browse-revert (_ignore-auto _noconfirm)
+(defun listen-subsonic--dired-revert (_ignore-auto _noconfirm)
   "Reload the current browser view.
 
 Re fetches data for the current ID and level from the API."
-  (listen-subsonic--browse-render listen-subsonic--browse-current-id
-                                  listen-subsonic--browse-current-name
-                                  listen-subsonic--browse-current-level))
+  (listen-subsonic--dired-render listen-subsonic--dired-current-id
+                                 listen-subsonic--dired-current-name
+                                 listen-subsonic--dired-current-level))
 
 (provide 'listen-subsonic)
 ;;; listen-subsonic.el ends here
