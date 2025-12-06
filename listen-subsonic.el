@@ -549,13 +549,9 @@ Backend for `listen-subsonic-browse-library'. HISTORY contains the user's naviga
     (setq listen-subsonic--art-active (1+ listen-subsonic--art-active))
     (pcase-let ((`(,url ,file ,buf ,pos) (pop listen-subsonic--art-queue)))
       (plz 'get url
-        :as 'binary
-        :then (lambda (data)
+        :as `(file ,file)
+        :then (lambda (_)
                 (setq listen-subsonic--art-active (1- listen-subsonic--art-active))
-                (let ((coding-system-for-write 'no-conversion))
-                  (with-temp-file file
-                    (set-buffer-multibyte nil)
-                    (insert data)))
                 (listen-subsonic--display-art file buf pos)
                 (listen-subsonic--process-art-queue))
         :else (lambda (_)
