@@ -248,7 +248,6 @@ The maximum returned tracks is 50."
               (listen-subsonic--json-to-listen item auth))
             items)))
 
-;; TODO: merge this with get-folder-tracks to simplify browse code
 (defun listen-subsonic--get-all-tracks (id)
   "Fetch all tracks under directory ID recursively."
   (let* ((data (listen-subsonic--api-call "getMusicDirectory" `(("id" . ,id))))
@@ -572,6 +571,8 @@ Place the point on the line's button."
     (define-key map (kbd "^") #'listen-subsonic--browse-up)
     (define-key map (kbd "g") #'revert-buffer)
     (define-key map (kbd "A") #'listen-subsonic--browse-add-all)
+    (define-key map (kbd "n") #'listen-subsonic--browse-next-line)
+    (define-key map (kbd "p") #'listen-subsonic--browse-prev-line)
     (define-key map [remap next-line] #'listen-subsonic--browse-next-line)
     (define-key map [remap previous-line] #'listen-subsonic--browse-prev-line)
     map)
@@ -587,7 +588,6 @@ Place the point on the line's button."
               listen-subsonic--browse-current-name nil
               listen-subsonic--browse-current-level nil))
 
-;; TODO: Restrict point to NOT enter prefix (similar to dired)
 (defun listen-subsonic-browse ()
   "Open a `dired'-like Subsonic browser buffer."
   (interactive)
@@ -699,7 +699,9 @@ Place the point on the line's button."
         (pcase-let ((`(,art-id ,buf ,pos)
                      (listen-subsonic--browse-insert-item item next)))
           (when (and art-id (not (memq level '(:root :indexes))))
-            (listen-subsonic--browse-fetch-art art-id buf pos)))))))
+            (listen-subsonic--browse-fetch-art art-id buf pos)))))
+    (beginning-of-buffer)
+    (listen-subsonic--browse-next-line)))
 
 ;; browser functions
 
