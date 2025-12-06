@@ -397,13 +397,16 @@ Should be added to `listen-track-end-functions'."
                          items)))
     (listen-subsonic--queue-tracks tracks queue)))
 
-;; TODO: Deduplicate logic between this and the library code below
+(defun listen-subsonic--read-playlist ()
+  "Prompt user for a Subsonic playlist and return its ID."
+  (let* ((playlists (listen-subsonic--get-playlists))
+         (name (completing-read "Playlist: " playlists nil t)))
+    (alist-get name playlists nil nil #'equal)))
+
 (defun listen-subsonic-queue-playlist (queue)
   "Add all tracks from a user's playlist to the QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
-  (let* ((playlists (listen-subsonic--get-playlists))
-         (name (completing-read "Playlist: " playlists nil t))
-         (id (alist-get name playlists nil nil #'equal))
+  (let* ((id (listen-subsonic--read-playlist))
          (tracks (listen-subsonic--get-playlist-tracks id)))
     (listen-subsonic--queue-tracks tracks queue)))
 
@@ -468,10 +471,7 @@ SOURCE may be one of:
             (lambda () (listen-subsonic-browse-library)))
            ("Playlist"
             (lambda ()
-              (let* ((playlists (listen-subsonic--get-playlists))
-                     (name (completing-read "Playlist: " playlists nil t))
-                     (id (alist-get name playlists nil nil #'equal)))
-                (listen-subsonic--get-playlist-tracks id))))
+              (listen-subsonic--get-playlist-tracks (listen-subsonic--read-playlist))))
            ("Search"
             (lambda ()
               (let ((query (read-string "Search: ")))
@@ -487,6 +487,7 @@ SOURCE may be one of:
   (message "Cleared Subsonic cache."))
 
 ;; Completing read browser
+;; TODO: Ensure that ".." and "[All]" are always on the top
 (defun listen-subsonic-browse-library ()
   "Browse the Subsonic library hierarchy using `completing-read'.
 Library hierarchy: Folder -> Artist -> Album -> Song.
