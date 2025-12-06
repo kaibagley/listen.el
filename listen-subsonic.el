@@ -417,16 +417,6 @@ Handles duplicate names by appending (n), and adds album using an affixation fun
            (selected-name (completing-read prompt track-map nil t)))
       (gethash selected-name track-map))))
 
-(defun listen-subsonic--queue-tracks (tracks queue)
-  "Add TRACKS to QUEUE with a message."
-  (if tracks
-      (progn
-        (listen-queue-add-tracks tracks queue)
-        (message "Added %d tracks to queue '%s'."
-                 (length tracks) (listen-queue-name queue))
-        (listen-queue queue))
-    (message "No tracks found.")))
-
 (defun listen-subsonic-queue-random (n queue)
   "Fetch and add to QUEUE a list of N random songs."
   (interactive
@@ -440,20 +430,20 @@ Handles duplicate names by appending (n), and adds album using an affixation fun
          (tracks (mapcar (lambda (item)
                            (listen-subsonic--json-to-listen item auth))
                          items)))
-    (listen-subsonic--queue-tracks tracks queue)))
+    (listen-queue-add-tracks tracks queue)))
 
 (defun listen-subsonic-queue-playlist (queue)
   "Add all tracks from a user's playlist to the QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
   (let* ((id (listen-subsonic--read-playlist))
          (tracks (listen-subsonic--get-playlist-tracks id)))
-    (listen-subsonic--queue-tracks tracks queue)))
+    (listen-queue-add-tracks tracks queue)))
 
 (defun listen-subsonic-queue-starred-tracks (queue)
   "Add all starred songs from Subsonic server to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
   (let ((tracks (listen-subsonic-get-starred-tracks)))
-    (listen-subsonic--queue-tracks tracks queue)))
+    (listen-queue-add-tracks tracks queue)))
 
 ;; TODO: C-u adds to start of queue/next?
 (defun listen-subsonic-queue-search-tracks (query queue)
