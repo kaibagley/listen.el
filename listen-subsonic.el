@@ -80,6 +80,7 @@ Must be a string."
 
 ;;;; General helpers
 
+;; TODO: I really don't like this function, can it be destroyed?
 (defun listen-subsonic--ensure-list (item)
   "Ensure ITEM is a list."
   (if (vectorp item)
@@ -193,8 +194,7 @@ PARAMS are optional API parameters."
          (items (alist-get itemkey root)))
     (listen-subsonic--ensure-list items)))
 
-;; TODO: This blocks emacs while waiting for response
-;; Look into consult's async features at some
+;; TODO: Look into consult's async features at some
 ;; stage? Maybe not necessary but will allow searching way more than 50
 (defun listen-subsonic-search-tracks (query)
   "Return a list of `listen-track' objects.
@@ -203,14 +203,20 @@ The maximum returned tracks is 50."
   (let ((items (listen-subsonic--get-items
                 "search3" 'searchResult3 'song
                 `(("query" . ,query)
-                  ("songCount" . ,listen-subsonic-search-max-results)))))
-    (mapcar #'listen-subsonic--json-to-listen items)))
+                  ("songCount" . ,listen-subsonic-search-max-results))))
+        (auth (listen-subsonic--get-auth-params)))
+    (mapcar (lambda (item)
+              (listen-subsonic--json-to-listen items auth))
+            items)))
 
 (defun listen-subsonic-get-starred-tracks ()
   "Fetch all starred songs from Subsonic server."
   (let ((items (listen-subsonic--get-items
-                "getStarred" 'starred 'song)))
-    (mapcar #'listen-subsonic--json-to-listen items)))
+                "getStarred" 'starred 'song))
+        (auth (listen-subsonic--get-auth-params)))
+    (mapcar (lambda (item)
+              (listen-subsonic--json-to-listen items auth))
+            items)))
 
 (defun listen-subsonic--get-playlists ()
   "Return an alist (name . id) of all playlists accessible to the user."
@@ -225,20 +231,23 @@ The maximum returned tracks is 50."
   "Return all tracks in PLAYLIST."
   (let ((items (listen-subsonic--get-items
                 "getPlaylist" 'playlist 'entry
-                `(("id" . ,playlist)))))
-    (mapcar #'listen-subsonic--json-to-listen items)))
+                `(("id" . ,playlist))))
+        (auth (listen-subsonic--get-auth-params)))
+    (mapcar (lambda (item)
+              (listen-subsonic--json-to-listen items auth))
+            items)))
 
 ;; TODO: merge this with get-folder-tracks to simplify browse code
 (defun listen-subsonic--get-all-tracks (id)
   "Fetch all tracks under directory ID recursively."
   (let* ((data (listen-subsonic--api-call "getMusicDirectory" `(("id" . ,id))))
          (parent (alist-get 'directory data))
-         (children (alist-get 'child parent)))
+         (children (alist-get 'child parent))
+         (auth (listen-subsonic--get-auth-params)))
     (mapcan (lambda (c)
               (if (alist-get 'isDir c)
                   (listen-subsonic--get-all-tracks (alist-get 'id c))
-                (list (listen-subsonic--json-to-listen c
-                                                       (listen-subsonic--get-auth-params)))))
+                (list (listen-subsonic--json-to-listen c auth))))
             children)))
 
 (defun listen-subsonic--get-folder-tracks (id)
@@ -247,8 +256,11 @@ The maximum returned tracks is 50."
                 "search3" 'searchResult3 'song
                 `(("musicFolderId" . ,id)
                   ("query" . "")
-                  ("songCount" . "100000")))))
-    (mapcar #'listen-subsonic--json-to-listen items)))
+                  ("songCount" . "100000"))))
+        (auth (listen-subsonic--get-auth-params)))
+    (mapcar (lambda (item)
+              (listen-subsonic--json-to-listen items auth))
+            items)))
 
 ;;;; Write requests
 
@@ -370,7 +382,10 @@ Should be added to `listen-track-end-functions'."
   (let* ((items (listen-subsonic--get-items
                  "getRandomSongs" 'randomSongs 'song
                  `(("size" . ,(number-to-string n)))))
-         (tracks (mapcar #'listen-subsonic--json-to-listen items)))
+         (auth (listen-subsonic--get-auth-params))
+         (tracks (mapcar (lambda (item)
+                           (listen-subsonic--json-to-listen item auth))
+                         items)))
     (listen-subsonic--queue-tracks tracks queue)))
 
 ;; TODO: Deduplicate logic between this and the library code below
