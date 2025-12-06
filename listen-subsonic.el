@@ -50,7 +50,14 @@ e.g., \"music.example.com\""
   :type 'string
   :group 'listen-subsonic)
 
-(defcustom listen-subsonic-search-max-results "50"
+(defcustom listen-subsonic-protocol "https"
+  "Protocol to use for calls to Subsonic API.
+Must be either \"http\" or \"https\""
+  :type '(choice (const :tag "HTTPS" "https")
+                 (const :tag "HTTP" "http"))
+  :group 'listen-subsonic)
+
+(defcustom listen-subsonic-search-max-results 50
   "Maximum results to return in search queries.
 Must be a string."
   :type 'string
@@ -110,15 +117,17 @@ Must be a string."
       ("c" . ,listen-subsonic-user-agent)
       ("f" . "json"))))
 
-;; TODO: Maybe allow insecure http later?
 (defun listen-subsonic--build-url (endpoint params)
   "Build a Subsonic API URL from ENDPOINT and PARAMS."
   (let* ((param-list (mapcar (lambda (p)
                                (list (car p) (cdr p)))
                              params))
          (param-str (url-build-query-string param-list nil t)))
-    (format "https://%s/rest/%s.view?%s"
-            listen-subsonic-url endpoint param-str)))
+    (format "%s://%s/rest/%s.view?%s"
+            listen-subsonic-protocol
+            listen-subsonic-url
+            endpoint
+            param-str)))
 
 ;;;; API Helpers
 
