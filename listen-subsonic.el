@@ -565,13 +565,13 @@ Handles duplicate names by appending a counter."
   "Show a `listen-library' buffer with content from SOURCE.
 
 SOURCE may be one of:
-- \"Browse\": Allows the user to browse a directory tree.
+- \"Find\": Allows the user to browse a directory tree.
 - \"Starred Tracks\": Library from starred tracks.
 - \"Playlist\": Library from a playlist.
 - \"Search\": Library from a search query."
   (interactive
    (list (completing-read "Source: "
-                          '("Browse"
+                          '("Find"
                             "Starred Tracks"
                             "Playlist"
                             "Search")
@@ -580,7 +580,7 @@ SOURCE may be one of:
          (pcase source
            ("Starred Tracks"
             (lambda () (listen-subsonic-get-starred-tracks)))
-           ("Browse"
+           ("Find"
             (lambda () (listen-subsonic-find)))
            ("Playlist"
             (lambda ()
