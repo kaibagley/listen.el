@@ -176,7 +176,9 @@ If AUTH-PARAMS is nil, new auth params are generated."
 (defun listen-subsonic--json-to-listen (s &optional auth-params)
   "Convert JSON alist S into a `listen-track' structure.
 If AUTH-PARAMS is nil, new auth params are generated."
-  (map-let (('id id) ('userRating rating) artist title album track genre duration year starred) s
+  (map-let
+      (('id id) ('userRating rating) artist title album track genre duration year starred)
+      s
     (make-listen-track
      :filename (listen-subsonic--get-stream-url id auth-params) ; silly mpv
      :artist artist
@@ -351,7 +353,7 @@ Should be added to `listen-track-end-functions'."
     (_ :directory)))
 
 (defun listen-subsonic--browse-get-prefix (item)
-  "Return a fixed-width string of ls-like metadata for ITEM."
+  "Return a fixed-width (15 chars) string of ls-like metadata for ITEM."
   (let* ((dirp (alist-get 'isDir item))
          (year (alist-get 'year item))
          (duration (alist-get 'duration item))
@@ -386,10 +388,8 @@ Handles duplicate names by appending (n), and adds album using an affixation fun
     (dolist (track tracks)
       ;; use "artist - track" as id
       (let* ((artist-track (format "%s - %s"
-                                   (propertize (listen-track-artist track)
-                                               'face 'listen-artist)
-                                   (propertize (listen-track-title track)
-                                               'face 'listen-title)))
+                                   (propertize (listen-track-artist track) 'face 'listen-artist)
+                                   (propertize (listen-track-title track) 'face 'listen-title)))
              (name artist-track)
              (count 1))
         ;; add number to duplicates
@@ -397,8 +397,7 @@ Handles duplicate names by appending (n), and adds album using an affixation fun
           (cl-incf count)
           (setq name (format "%s %s"
                              artist-track
-                             (propertize (format "(%d)" count)
-                                         'face 'shadow))))
+                             (propertize (format "(%d)" count) 'face 'shadow))))
         (puthash name track track-map)))
     ;; affixation-function is cursed, am i doing this right?
     (let* ((affix-fn
@@ -445,7 +444,7 @@ Handles duplicate names by appending (n), and adds album using an affixation fun
   (let ((tracks (listen-subsonic-get-starred-tracks)))
     (listen-queue-add-tracks tracks queue)))
 
-;; TODO: C-u adds to start of queue/next?
+;; TODO: C-u adds to start of queue/next? Waiting for listen-queue function to enable
 (defun listen-subsonic-queue-search-tracks (query queue)
   "Search Subsonic server for QUERY and add results to the current QUEUE."
   (interactive
@@ -554,11 +553,27 @@ Backend for `listen-subsonic-browse-library'. HISTORY contains the user's naviga
               (format "Subsonic: %s" sel-name)))))))
 
 ;; dired-like browser UI
+(defun listen-subsonic--browse-next-line (&optional n)
+  "Move 1, or N lines up, or if N is a negative number, move down.
+Place the point on the line's button."
+  (interactive)
+  (line-move (or n 1) t)
+  (beginning-of-line)
+  (when (re-search-forward "[📁🎵] " (line-end-position) t)
+    (goto-char (match-beginning 0))))
+
+(defun listen-subsonic--browse-prev-line (&optional n)
+  "Move 1, or N lines down, snapping the point to the button on the line."
+  (interactive)
+  (listen-subsonic--browse-next-line (- 0 (or n 1))))
+
 (defvar listen-subsonic-browse-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "^") #'listen-subsonic--browse-up)
     (define-key map (kbd "g") #'revert-buffer)
     (define-key map (kbd "A") #'listen-subsonic--browse-add-all)
+    (define-key map [remap next-line] #'listen-subsonic--browse-next-line)
+    (define-key map [remap previous-line] #'listen-subsonic--browse-prev-line)
     map)
   "Keymap for `listen-subsonic-browse-mode'.")
 
@@ -582,7 +597,7 @@ Backend for `listen-subsonic-browse-library'. HISTORY contains the user's naviga
       (listen-subsonic--browse-render nil "Root" :root)) ;; Start at :root
     (switch-to-buffer buf)))
 
-;; TODO: cl-decf and cl-incf are built-in in emacs 31.1 (decf and incf)
+;; TODO: When emacs 31.1 is released, cl-decf/cl-incf -> decf/incf
 (defun listen-subsonic--process-art-queue ()
   "Process background art queue."
   (while (and listen-subsonic--art-queue
