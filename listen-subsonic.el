@@ -77,6 +77,15 @@ Must be a string."
 (defvar listen-subsonic--art-max 10
   "Max concurrent downloads.")
 
+;;;; General helpers
+
+(defun listen-subsonic--ensure-list (item)
+  "Ensure ITEM is a list."
+  (if (vectorp item)
+      (append item nil)
+    ;; This already exists?
+    (ensure-list item)))
+
 ;;;; Auth helpers
 
 (defun listen-subsonic--get-credentials ()
@@ -142,14 +151,6 @@ If CALLBACK is non-nil, run asynchronously and call CALLBACK with the data."
       :headers api-headers
       :as #'listen-subsonic--process-api-response
       :then (or callback 'sync))))
-
-(defun listen-subsonic--ensure-list (item)
-  "Ensure ITEM is a list."
-  (cond
-   ((vectorp item) (append item nil))
-   ((null item) nil)
-   ((and (listp item) (consp (car item))) (list item))
-   (t (list item))))
 
 ;;;; Data formatting
 
@@ -514,13 +515,18 @@ Backend for `listen-subsonic-browse-library'. HISTORY contains the user's naviga
               (format "Subsonic: %s" sel-name)))))))
 
 ;; dired-like browser UI
+(defvar listen-subsonic-browse-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "^") #'listen-subsonic--browse-up)
+    (define-key map (kbd "g") #'revert-buffer)
+    (define-key map (kbd "A") #'listen-subsonic--browse-add-all)
+    map)
+  "Keymap for `listen-subsonic-browse-mode'.")
 
 (define-derived-mode listen-subsonic-browse-mode special-mode "Subsonic-Browser"
   "Major mode for `dired'-like browsing of Subsonic libraries."
   :interactive nil
-  (define-key listen-subsonic-browse-mode-map (kbd "^") #'listen-subsonic--browse-up)
-  (define-key listen-subsonic-browse-mode-map (kbd "g") #'revert-buffer)
-  (define-key listen-subsonic-browse-mode-map (kbd "A") #'listen-subsonic--browse-add-all)
+  :keymap listen-subsonic-browse-mode-map
   (setq-local revert-buffer-function #'listen-subsonic--browse-revert
               listen-subsonic--browse-history nil
               listen-subsonic--browse-current-id nil
@@ -593,7 +599,7 @@ Backend for `listen-subsonic-browse-library'. HISTORY contains the user's naviga
                      (:root 'listen-genre)
                      (:indexes 'listen-artist)
                      (t 'listen-album))
-                 'listen-track)))
+                 'listen-title)))
     (insert (propertize prefix 'face 'shadow))
     (insert-text-button
      (concat (if dirp "📁 " "🎵 ") name)
