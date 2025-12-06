@@ -417,37 +417,55 @@ Should be added to `listen-track-end-functions'."
     (listen-subsonic--queue-tracks tracks queue)))
 
 ;; TODO: C-u adds to start of queue/next?
-;; TODO; Use annotate-function to make this (and other functions) look better
 (defun listen-subsonic-queue-search-tracks (query queue)
   "Search Subsonic server for QUERY and add results to the current QUEUE."
   (interactive
-   (list
-    (read-string "Search Subsonic: ")
-    (listen-queue-complete :allow-new-p t)))
+   (list (read-string "Search Subsonic: ")
+         (listen-queue-complete :allow-new-p t)))
   (let* ((tracks (listen-subsonic-search-tracks query))
-         (candidates (mapcar (lambda (track)
-                               (cons (format "%s - %s (%s)"
-                                             (listen-track-artist track)
-                                             (listen-track-title track)
-                                             (listen-track-album track))
-                                     track))
-                             tracks))
-         (selected-names (if tracks
-                             (completing-read-multiple "Select tracks (CRM): "
-                                                       candidates
-                                                       nil t)
-                           nil))
-         (selected-tracks (mapcar (lambda (name)
-                                    (alist-get name candidates nil nil #'equal))
-                                  selected-names)))
-    (if selected-tracks
-        (progn
-          (listen-queue-add-tracks selected-tracks queue)
-          (message "Added %d tracks from Subsonic to queue '%s'."
-                   (length selected-tracks)
-                   (listen-queue-name queue))
-          (listen-queue queue))
-      (message "No tracks found or added to '%s'" query))))
+         (track-map (make-hash-table :test 'equal))
+         (candidates
+          (mapcar
+           (lambda (track)
+             ;; use "artist - track" as id
+             (let* ((artist-track (format "%s - %s"
+                                       (propertize (listen-track-artist track)
+                                                   'face 'listen-artist)
+                                       (propertize (listen-track-title track)
+                                                   'face 'listen-title)))
+                    (name artist-track)
+                    (count 1))
+               ;; add number to duplicates
+               (while (gethash name track-map)
+                 (cl-incf count)
+                 (setq name (format "%s %s"
+                                    artist-track
+                                    (propertize (format "(%d)" count)
+                                                'face 'shadow))))
+               (puthash name track track-map)
+               name))
+           tracks)))
+    (when candidates
+      ;; affixation-function is cursed, am i doing this right?
+      (let* ((affix-fn
+              (lambda (cands)
+                (mapcar (lambda (cand)
+                          (let* ((track (gethash cand track-map))
+                                 (len (string-width cand))
+                                 (padding (make-string (max 5 (- 40 len)) ?\s))
+                                 (suffix (format "%s%s"
+                                                 padding
+                                                 (propertize (listen-track-album track)
+                                                             'face 'listen-album))))
+                            (list cand "" suffix)))
+                        cands)))
+             (selected-name
+              (let ((completion-extra-properties
+                     `(:affixation-function ,affix-fn)))
+                (completing-read "Select track: " candidates nil t)))
+             (selected-track (gethash selected-name track-map)))
+        (listen-queue-add-tracks (list selected-track) queue)
+        (message "Added '%s' to queue." (listen-track-title selected-tracks))))))
 
 (defun listen-library-from-subsonic (&optional source)
   "Show a library view for subsonic.
