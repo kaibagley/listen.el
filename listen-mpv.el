@@ -19,7 +19,7 @@
 
 ;;; Commentary:
 
-;; 
+;;
 
 ;;; Code:
 
@@ -105,6 +105,7 @@
         (sleep-for 1)
         (setf (map-elt (listen-player-etc player) :network-process)
               (make-network-process :name "listen-player-mpv-socket" :family 'local
+                                    :service t
                                     :remote socket :noquery t
                                     :buffer socket-buffer
                                     :service nil)
@@ -196,7 +197,10 @@ When NEW-STATUS is `playing', updates started-at and started-from slots."
 (cl-defmethod listen--play ((player listen-player-mpv) file)
   "Play FILE with PLAYER.
 Stops playing, clears playlist, adds FILE, and plays it."
-  (listen--send* player `("loadfile" ,(expand-file-name file)) :then #'ignore))
+  (let ((path (if (string-prefix-p "http" file)
+                  file
+                (expand-file-name file))))
+    (listen--send* player `("loadfile" ,path) :then #'ignore)))
 
 ;; (cl-defmethod listen--stop ((player listen-player-mpv))
 ;;   "Stop playing with PLAYER."
@@ -229,7 +233,8 @@ Stops playing, clears playlist, adds FILE, and plays it."
   (if (listen--playing-p player)
       (setf (map-elt (listen-player-etc player) :elapsed)
             (+ (time-to-seconds
-                (time-subtract (current-time) (listen-player-playback-started-at player)))
+                (time-subtract (current-time)
+                               (or (listen-player-playback-started-at player) 0)))
                (listen-player-playback-started-from player)))
     (map-elt (listen-player-etc player) :elapsed)))
 

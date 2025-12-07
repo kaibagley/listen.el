@@ -175,7 +175,7 @@ Useful for when `save-excursion' does not preserve point."
                                    (listen-format-seconds duration))))
                  (list :name "r/5"
                        :getter (lambda (track _table)
-                                 (if-let ((rating (map-elt (listen-track-etc track) "fmps_rating"))
+                                 (if-let ((rating (listen-track-rating track))
                                           ((not (equal "-1" rating))))
                                      (progn
                                        (setf rating (number-to-string (* 5 (string-to-number rating))))
@@ -392,6 +392,7 @@ which see."
     (push queue listen-queues)
     queue))
 
+;; TODO: Should this also kill the queue buffers?
 (defun listen-queue-discard (queue)
   "Discard QUEUE."
   (interactive (list (listen-queue-complete :prompt "Discard queue: ")))
@@ -421,6 +422,7 @@ Completes files with `listen-complete-files', which see."
   (listen-queue queue)
   queue)
 
+;; TODO: Look into utilising this function for Subsonic support
 (cl-defun listen-queue-add-urls (urls queue)
   "Add URLS to QUEUE."
   (interactive
@@ -430,6 +432,11 @@ Completes files with `listen-complete-files', which see."
   (cl-callf append (listen-queue-tracks queue) (listen-queue-tracks-for urls))
   (listen-queue queue)
   queue)
+
+(defun listen-queue-track-id-key (track)
+  "Generate unique string key for TRACK."
+  (or (map-elt (listen-track-etc track) 'id)
+      (expand-file-name (listen-track-filename track))))
 
 (defun listen-queue-add-tracks (tracks queue)
   "Add TRACKS to QUEUE.
@@ -764,6 +771,7 @@ tracks in the queue unchanged)."
                          (get 'number)
                          (get 'date)
                          (cons " " " "))
+                   ;; TODO: A way for Subsonic songs to show metadata here
                    (sort (listen-info--decode-info-fields (listen-track-filename track))
                          (lambda (a b)
                            (string< (car a) (car b))))))

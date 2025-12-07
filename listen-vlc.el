@@ -19,7 +19,7 @@
 
 ;;; Commentary:
 
-;; 
+;;
 
 ;;; Code:
 
@@ -142,7 +142,7 @@ Stops playing, clears playlist, adds FILE, and plays it."
 VOLUME is an integer percentage."
   ;; While it is unclear from VLC's documentation, and even its source code at some revisions,
   ;; testing shows that the "rc" interface handles volume on a scale of 256 steps, where 255 = 100%
-  ;; (and values >255 are >100%).  See <https://code.videolan.org/videolan/vlc/-/issues/25143> and
+  ;; (and values >255 are >100%). See <https://code.videolan.org/videolan/vlc/-/issues/25143> and
   ;; <https://code.videolan.org/videolan/vlc/-/commits/80b8c8254cb2fddd59d31ba3a46a6640d7ef23da>.
   (pcase-let (((cl-struct listen-player max-volume) player))
     (if volume
