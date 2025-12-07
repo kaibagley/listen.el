@@ -5,7 +5,7 @@
 ;; Author: Adam Porter <adam@alphapapa.net>
 ;; Maintainer: Adam Porter <adam@alphapapa.net>
 ;; Keywords: multimedia
-;; Package-Requires: ((emacs "29.1") (persist "0.6") (taxy "0.10") (taxy-magit-section "0.13") (transient "0.5.3"))
+;; Package-Requires: ((emacs "29.1") (persist "0.6") (taxy "0.10") (taxy-magit-section "0.13") (transient "0.5.3") (plz "0.9"))
 ;; Version: 0.10-pre
 ;; URL: https://github.com/alphapapa/listen.el
 
@@ -63,6 +63,7 @@
 ;; TODO: Can we load these as-needed?
 (require 'listen-mpv)
 (require 'listen-vlc)
+(require 'listen-subsonic)
 
 ;;;; Variables
 
@@ -316,6 +317,8 @@ According to `listen-lighter-format', which see."
           (listen-mode-lighter)))
   (force-mode-line-update 'all))
 
+;; TODO: (at least) with Navidrome, there is a gap between playback currently, and thus the lighter
+;; will vanish and reappear in between songs.
 (defun listen-play-next (player)
   "Play PLAYER's queue's next track and return non-nil if playing."
   (when-let ((queue (map-elt (listen-player-etc player) :queue)))
@@ -441,9 +444,11 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
 
    ["Library view"
     ("lf" "from files" listen-library)
-    ("lm" "from MPD" listen-library-from-mpd)
     ("lq" "from queue" listen-library-from-queue)
-    ("lp" "from playlist file" listen-library-from-playlist-file)]]
+    ("lp" "from playlist file" listen-library-from-playlist-file)]
+   [""
+    ("ls" "from subsonic" listen-library-from-subsonic)
+    ("lm" "from MPD" listen-library-from-mpd)]]
 
   [["Queue mode"
     :description
@@ -470,6 +475,7 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
     ("qD" "Discard" listen-queue-discard
      :transient t)]
    ["Tracks"
+    ;; TODO: Grey-out when using Subsonic
     ("qj" "Jump to current in Dired" listen-jump)
     ("qt" "Play track" (lambda ()
                          "Call `listen-queue-play' with prefix."
@@ -487,6 +493,11 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
     ("qam" "from MPD" listen-queue-add-from-mpd
      :transient t)
     ("qap" "from playlist file" listen-queue-add-from-playlist-file
+     :transient t)]
+   ["Subsonic"
+    ("qvs" "search" listen-subsonic-queue-search-tracks
+     :transient t)
+    ("qva" "queue starred" listen-subsonic-queue-starred-tracks
      :transient t)]])
 
 ;; NOTE: This alias must come after the command it refers to, otherwise the autoload file fails to
