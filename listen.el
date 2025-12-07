@@ -92,7 +92,15 @@ happens, this option truncates before that format spec is applied
 and adds an ellipsis where it occurs."
   :type 'natnum)
 
-(defcustom listen-lighter-format "🎵:%s %a: %t (%r)%E "
+(defcustom listen-lighter-symbols-list '("🎵" "▶" "⏸" "■")
+  "List of symbols to use in the `listen-mode-lighter'.
+Must contain 3 elements:
+1. Some musical symbol (defaults to 🎵)
+2. Play symbol (defaults to ▶)
+3. Pause symbol (defaults to ⏸)
+4. Stop symbol (defaults to ■)")
+
+(defcustom listen-lighter-format "%m:%s %a: %t (%r)%E "
   "Format for mode line lighter.
 Uses `format-spec', which see.  These format specs are available:
 
@@ -103,6 +111,7 @@ Uses `format-spec', which see.  These format specs are available:
 %e: Elapsed time
 %r: Remaining time
 %s: Player status icon
+%m: Musical note
 
 %E: Extra data specified in `listen-lighter-extra-functions',
     which see."
@@ -120,6 +129,12 @@ without extra whitespace."
   "Functions called when a track finishes playing.
 Called with one argument, the player (if the player has a queue,
 its current track will be the one that just finished playing)."
+  :type 'hook)
+
+(defcustom listen-track-start-functions '()
+  "Functions called when a track starts playing.
+Called with one argument, the player (if the player has a queue,
+its current track will be the one that just started playing)."
   :type 'hook)
 
 (defcustom listen-show-video t
@@ -279,11 +294,12 @@ According to `listen-lighter-format', which see."
                                                      (- (listen--length listen-player)
                                                         (listen--elapsed listen-player))))
                                         'face 'listen-lighter-time)))
+                   (?m . ,(nth 0 listen-lighter-symbols-list))
                    (?s . ,(lambda ()
                             (propertize (pcase (listen--status listen-player)
-                                          ('playing "▶")
-                                          ('paused "⏸")
-                                          ('stopped "■")
+                                          ("playing" (nth 1 listen-lighter-symbols-list))
+                                          ("paused" (nth 2 listen-lighter-symbols-list))
+                                          ("stopped" (nth 3 listen-lighter-symbols-list))
                                           (_ ""))
                                         'face 'bold)))
                    (?E . ,(lambda ()
@@ -385,9 +401,12 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
   ["Listen"
    :description
    ;; TODO: Try using `transient-info' class for this line.
+   ;; TODO: Doesn't display current song properly after listen-next with :transient t
    (lambda ()
      (if listen-player
-         (concat "Listening: " (listen-mode-lighter))
+         (concat "Listening: "
+                 (let ((listen-lighter-title-max-length 79))
+                   (listen-mode-lighter)))
        "Not listening"))
    ;; Getting this layout to work required a lot of trial-and-error.
    [("Q" "Quit" listen-quit
@@ -408,7 +427,8 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
     ("SPC" "Pause" listen-pause)
     ("p" "Play" listen-play)
     ;; ("ESC" "Stop" listen-stop)
-    ("n" "Next" listen-next)
+    ("n" "Next" listen-next
+     :transient t)
     ("s" "Seek" listen-seek)]
    ["Volume"
     :if (lambda ()
