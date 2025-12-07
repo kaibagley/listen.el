@@ -19,7 +19,7 @@
 
 ;;; Commentary:
 
-;; 
+;;
 
 ;;; Code:
 
@@ -131,7 +131,7 @@ Useful for when `save-excursion' does not preserve point."
   (if-let ((buffer (listen-queue-buffer queue)))
       (progn
         (pop-to-buffer buffer)
-        (listen-queue-goto-current))
+        (listen-queue-goto-current queue))
     (with-current-buffer
         (setf buffer (get-buffer-create (format "*Listen Queue: %s*" (listen-queue-name queue))))
       (let ((inhibit-read-only t))
@@ -236,7 +236,7 @@ Useful for when `save-excursion' does not preserve point."
                                 (call-interactively #'listen-library-from-queue))
                           "!" (lambda (_) (call-interactively #'listen-queue-shell-command)))))
         (listen-queue--annotate-buffer)
-        (listen-queue-goto-current)))
+        (listen-queue-goto-current queue)))
     ;; NOTE: We pop to the buffer outside of `with-current-buffer' so
     ;; `listen-queue--bookmark-handler' works correctly.
     (pop-to-buffer buffer)))
@@ -251,6 +251,7 @@ To be called in a queue's buffer."
          (inhibit-read-only t))
     (setf (map-elt (listen-queue-etc queue) :duration) duration)
     (vtable-end-of-table)
+    (delete-region (point) (point-max))
     (when duration
       (insert (format "Duration: %s" (listen-format-seconds duration))))
     (listen-queue--highlight-current)))
@@ -323,7 +324,7 @@ If BACKWARDP, move it backward."
       (when (vtable-current-table)
         (vtable-revert-command))
       (listen-queue--annotate-buffer))
-    (listen-queue-goto-current)))
+    (listen-queue-goto-current queue)))
 
 (defun listen-queue-update-track (track queue)
   "Update TRACK in QUEUE.
@@ -351,12 +352,9 @@ select track as well."
      (list queue track)))
   (let ((player (listen-current-player)))
     (listen-play player (listen-track-filename track))
-    (when-let ((position (map-elt (listen-track-etc track) 'position)))
-      ;; Try to restore previous position.
-      ;; TODO: Make this optional.
-      (declare-function listen-seek "listen")
-      (listen--after-playback-starts player (lambda ()
-                                              (listen-seek player position))))
+    ;; Remember queue position of track so if it gets removed, we can still go to the next track.
+    (setf (map-elt (listen-queue-etc queue) :track-number)
+          (seq-position (listen-queue-tracks queue) track))
     (let ((previous-track (listen-queue-current queue)))
       (setf (listen-queue-current queue) track
             (map-elt (listen-player-etc player) :queue) queue)
@@ -378,34 +376,18 @@ select track as well."
     (listen-mode))
   queue)
 
-(cl-defun listen--after-playback-starts (player fn &key has-played-p (timeout 120))
-  "Call FN when PLAYER has STATUS."
-  (let (run-again-p)
-    (if (zerop timeout)
-        (warn "listen--after-playback-starts: Timed out.")
-      (declare-function listen--status "listen-vlc")
-      (if (equal "playing" (listen--status player))
-          (progn
-            (setf has-played-p t)
-            (if (> (listen--elapsed player) 0)
-                (funcall fn)
-              (setf run-again-p t)))
-        ;; Not playing.
-        (if has-played-p
-            (warn "listen--after-playback-starts: Player stopped.")
-          ;; Wait for playing.
-          (setf run-again-p t))))
-    (when run-again-p
-      (run-at-time 1 nil #'listen--after-playback-starts
-                   player fn :timeout (1- timeout) :has-played-p has-played-p))))
-
-(defun listen-queue-goto-current ()
+(defun listen-queue-goto-current (queue)
   "Jump to current track."
-  (interactive)
-  (when-let ((current-track (listen-queue-current listen-queue)))
-    ;; Ensure point is within the vtable.
-    (goto-char (point-min))
-    (vtable-goto-object current-track)))
+  (interactive (list (listen-queue-complete)))
+  (unless (listen-queue-buffer queue)
+    (listen-queue queue))
+  (listen-queue-with-buffer queue
+    (when-let ((current-track (listen-queue-current queue)))
+      ;; Ensure point is within the vtable.
+      (goto-char (point-min))
+      (vtable-goto-object current-track))
+    (unless (get-buffer-window (current-buffer))
+      (display-buffer (current-buffer)))))
 
 (defun listen-queue-complete-track (queue)
   "Return track selected from QUEUE with completion."
@@ -465,16 +447,26 @@ which see."
   (interactive (list (listen-queue-complete :prompt "Discard queue: ")))
   (cl-callf2 delete queue listen-queues))
 
+(defun listen-complete-files ()
+  ;; FIXME: Use this function in more places as appropriate.
+  "Return files selected with completion.
+In a Dired buffer, use `dired-get-marked-files'."
+  (declare-function dired-get-marked-files "dired")
+  (cl-case major-mode
+    (dired-mode (dired-get-marked-files))
+    (otherwise (let ((path (expand-file-name (read-file-name "Enqueue file/directory: "
+                                                             listen-directory nil t))))
+                 (if (file-directory-p path)
+                     (directory-files-recursively path ".")
+                   (list path))))))
+
 ;;;###autoload
 (cl-defun listen-queue-add-files (files queue)
-  "Add FILES to QUEUE."
+  "Add FILES to QUEUE.
+Completes files with `listen-complete-files', which see."
   (interactive
-   (let ((queue (listen-queue-complete :allow-new-p t))
-         (path (expand-file-name (read-file-name "Enqueue file/directory: " listen-directory nil t))))
-     (list (if (file-directory-p path)
-               (directory-files-recursively path ".")
-             (list path))
-           queue)))
+   (let ((queue (listen-queue-complete :allow-new-p t)))
+     (list (listen-complete-files) queue)))
   (cl-callf append (listen-queue-tracks queue) (listen-queue-tracks-for files))
   (listen-queue queue)
   queue)
@@ -496,10 +488,7 @@ the queue's buffer is updated, if any."
   (cl-callf append (listen-queue-tracks queue) tracks)
   ;; TODO: Consider updating the metadata of any duplicate tracks.
   (setf (listen-queue-tracks queue)
-        (cl-delete-duplicates (listen-queue-tracks queue)
-                              :key (lambda (track)
-                                     (expand-file-name (listen-track-filename track)))
-                              :test #'file-equal-p))
+        (listen-delete-dups (listen-queue-tracks queue) 'listen-track-equal))
   (listen-queue--update-buffer queue))
 
 (cl-defun listen-queue-add-from-playlist-file (filename queue)
@@ -684,12 +673,24 @@ tracks no longer backed by a file are removed."
       ;; the track metadata and refreshes the queue from disk while
       ;; the track is playing), in which case it won't be able to find
       ;; the track in the queue, so look again by comparing filenames.
-      (seq-elt (listen-queue-tracks queue)
-               (1+ (seq-position (listen-queue-tracks queue)
-                                 (listen-queue-current queue)
-                                 (lambda (a b)
-                                   (equal (listen-track-filename a)
-                                          (listen-track-filename b))))))))
+      (let ((current-track-position
+             (or (seq-position (listen-queue-tracks queue)
+                               (listen-queue-current queue)
+                               (lambda (a b)
+                                 (equal (expand-file-name (listen-track-filename a))
+                                        (expand-file-name (listen-track-filename b)))))
+                 (progn
+                   (display-warning 'listen-queue
+                                    (format-message "listen: Can't find track (%S) in queue (%S)"
+                                                    (listen-queue-current queue)
+                                                    (listen-queue-name queue))
+                                    :debug)
+                   (if-let ((track-number (map-elt (listen-queue-etc queue) :track-number)))
+                       ;; If the track was removed, the next track in the queue should have
+                       ;; taken its place, and we don't want to skip it, so subtract one.
+                       (1- track-number)
+                     (error "listen: Couldn't find track in queue, and track number is nil"))))))
+        (seq-elt (listen-queue-tracks queue) (1+ current-track-position)))))
 
 (declare-function listen-shell-command "listen")
 (defun listen-queue-shell-command (command filenames)

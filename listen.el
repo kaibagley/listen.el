@@ -60,6 +60,8 @@
 (require 'map)
 
 (require 'listen-lib)
+;; TODO: Can we load these as-needed?
+(require 'listen-mpv)
 (require 'listen-vlc)
 
 ;;;; Variables
@@ -124,6 +126,14 @@ its current track will be the one that just finished playing)."
 Intended to be toggled from `listen-menu'."
   :type 'boolean)
 
+(defcustom listen-backend
+  (cond ((executable-find "mpv") #'make-listen-player-mpv)
+        ((executable-find "vlc") #'make-listen-player-vlc)
+        (t (display-warning 'listen-backend "Unable to find MPV or VLC." :error)))
+  "Player backend."
+  :type '(choice (const :tag "MPV" make-listen-player-mpv)
+                 (const :tag "VLC" make-listen-player-vlc)))
+
 ;;;; Commands
 
 (defun listen-quit (player)
@@ -136,11 +146,11 @@ Interactively, uses the default player."
     (setf listen-player nil))
   (listen-mode--update))
 
-(declare-function listen-queue-next "listen-queue")
 (defun listen-next (player)
   "Play next track in PLAYER's queue.
 Interactively, uses the default player."
   (interactive (list (listen-current-player)))
+  (declare-function listen-queue-next "listen-queue")
   (listen-queue-next (map-elt (listen-player-etc player) :queue)))
 
 (defun listen-pause (player)
@@ -241,19 +251,20 @@ Interactively, jump to current queue's current track."
 (defun listen-mode-lighter ()
   "Return lighter for `listen-mode'.
 According to `listen-lighter-format', which see."
-  (when-let ((listen-player)
-             ((listen--running-p listen-player))
-             ((listen--playing-p listen-player))
-             (info (listen--info listen-player)))
+  (when-let* ((player listen-player)
+              ((listen--running-p player))
+              ((pcase (listen-player-status player)
+                 ((or 'playing 'paused) t)))
+              (metadata (listen-player-metadata player)))
     (format-spec listen-lighter-format
                  `((?a . ,(lambda ()
-                            (propertize (or (alist-get "artist" info nil nil #'equal) "")
+                            (propertize (or (alist-get 'artist metadata nil nil #'equal) "")
                                         'face 'listen-lighter-artist)))
                    (?A . ,(lambda ()
-                            (propertize (or (alist-get "album" info nil nil #'equal) "")
+                            (propertize (or (alist-get 'album metadata nil nil #'equal) "")
                                         'face 'listen-lighter-album)))
                    (?t . ,(lambda ()
-                            (if-let ((title (alist-get "title" info nil nil #'equal)))
+                            (if-let ((title (alist-get 'title metadata nil nil #'equal)))
                                 (propertize
                                  (truncate-string-to-width title listen-lighter-title-max-length
                                                            nil nil t)
@@ -269,9 +280,9 @@ According to `listen-lighter-format', which see."
                                         'face 'listen-lighter-time)))
                    (?s . ,(lambda ()
                             (propertize (pcase (listen--status listen-player)
-                                          ("playing" "▶")
-                                          ("paused" "⏸")
-                                          ("stopped" "■")
+                                          ('playing "▶")
+                                          ('paused "⏸")
+                                          ('stopped "■")
                                           (_ ""))
                                         'face 'bold)))
                    (?E . ,(lambda ()
@@ -290,33 +301,22 @@ According to `listen-lighter-format', which see."
     (unless (equal "-1" rating)
       (format "[%s]" (* 5 (string-to-number rating))))))
 
-(declare-function listen-queue-play "listen-queue")
-(declare-function listen-queue-next-track "listen-queue")
 (defun listen-mode--update (&rest _ignore)
   "Play next track and/or update variable `listen-mode-lighter'."
-  (let ((playingp (and listen-player (listen--playing-p listen-player)))
-        (current-track (listen-current-track))
-        playing-next-p)
-    (when listen-player
-      (when (and playingp current-track
-                 ;; Don't update the position unless we're at least 10 seconds in.  This gives us a
-                 ;; grace period in which to try to set the position to one from last time.
-                 ;; TODO: Make this configurable.
-                 (> (listen--elapsed listen-player) 10))
-        (setf (map-elt (listen-track-etc current-track) 'position)
-              (listen--elapsed listen-player)))
-      (unless (or playingp
+  (declare-function listen-queue-play "listen-queue")
+  (declare-function listen-queue-next-track "listen-queue")
+  (let (playing-next-p)
+    (when (and listen-player (listen--running-p listen-player))
+      (unless (or (listen--playing-p listen-player)
                   ;; HACK: It seems that sometimes the player gets restarted
                   ;; even when paused: this extra check should prevent that.
-                  (member (listen--status listen-player) '("playing" "paused")))
+                  (member (listen--status listen-player) '(playing paused)))
         (setf playing-next-p
               (run-hook-with-args 'listen-track-end-functions listen-player))))
     (setf listen-mode-lighter
           (when (and listen-player (listen--running-p listen-player))
             (listen-mode-lighter)))
-    (when playing-next-p
-      ;; TODO: Remove this (I think it's not necessary anymore).
-      (force-mode-line-update 'all))))
+    (force-mode-line-update 'all)))
 
 (defun listen-play-next (player)
   "Play PLAYER's queue's next track and return non-nil if playing."
@@ -414,8 +414,9 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
           listen-player)
     :description
     (lambda ()
-      (if listen-player
-          (format "Volume: %.0f%%" (listen--volume listen-player))
+      (if-let ((listen-player)
+               (volume (listen--volume listen-player)))
+          (format "Volume: %.0f%%" volume)
         "Volume: N/A"))
     ("=" "Set" listen-volume)
     ("v" "Down" (lambda ()
