@@ -208,7 +208,7 @@ Returns a `listen-track' struct.
 If AUTH-PARAMS is nil, new auth params are generated."
   (map-let
       (('id id) ('userRating rating) artist title album track genre duration year starred)
-      s
+      json-data
     (make-listen-track
      :filename (listen-subsonic--get-stream-url id auth-params) ; silly mpv
      :artist artist
@@ -220,7 +220,7 @@ If AUTH-PARAMS is nil, new auth params are generated."
      :date year
      ;; Rating is a string, "0.0" - "1.0". Subsonic returns 0-5 or nil
      :rating (when rating (format "%f" (/ rating 5.0)))
-     :metadata s
+     :metadata json-data
      :etc `((source . "subsonic")
             (id . ,id)
             (starred . ,(when starred t))))))
@@ -549,10 +549,96 @@ Handles duplicate names by appending a counter."
     (listen-queue-add-tracks tracks queue)))
 
 ;; TODO: C-u adds to start of queue/next? Waiting for listen-queue function to enable
+(defun listen-subsonic--search (query)
+  "Search server for QUERY at \"search3\" endpoint.
+Returns a list of tagged items. Each item is an alist with an added keyword `subsonic-type'."
+  (let* ((max-results (number-to-string (/ listen-subsonic-search-max-results 3)))
+         (params `(("query" . ,query)
+                   ("artistCount" . ,max-results)
+                   ("albumCount" . ,max-results)
+                   ("songCount" . ,max-results)))
+         (response (listen-subsonic--api-call "search3" params))
+         (result (alist-get 'searchResult3 response))
+         (artists (listen-subsonic--ensure-list (alist-get 'artist result)))
+         (albums (listen-subsonic--ensure-list (alist-get 'album result)))
+         (tracks (listen-subsonic--ensure-list (alist-get 'song result))))
+    (nconc
+     (mapcar (lambda (item) (cons '(subsonic-type . "Artist") item)) artists)
+     (mapcar (lambda (item) (cons '(subsonic-type . "Album") item)) albums)
+     (mapcar (lambda (item) (cons '(subsonic-type . "Track") item)) tracks))))
+
+(defun listen-subsonic--search-suffix (item)
+  "Return a suffix string for ITEM type."
+  (pcase (alist-get 'subsonic-type item)
+    ("Artist" "")
+    ("Album" (concat (alist-get 'artist item)
+                     (when-let* ((year (alist-get 'year item)))
+                       (format " (%s)" year))))
+    ("Track" (concat (alist-get 'artist item)
+                     " - "
+                     (alist-get 'album item)
+                     (format " (%s)" (listen-format-seconds (or (alist-get 'duration item) 0)))))))
+
+(defun listen-subsonic-search (query)
+  "Search the server for QUERY, and display artists, albums and tracks.
+
+- Selecting a track adds it to the queue.
+- Selecting an artist or album opens the `listen-subsonic-find' browsing functionality."
+  (interactive (list (read-string "Search: ")))
+  (let* ((items (listen-subsonic--search query))
+         (items-map (make-hash-table :test 'equal))
+         (queue (listen-queue-complete :allow-new-p t)))
+
+    (unless items
+      (user-error "No search results for '%s'" query))
+
+    ;; hashmap for completions
+    (dolist (item items)
+      (let* ((type (alist-get 'subsonic-type item))
+             (name (if (string= type "Track")
+                       (format "%s - %s" (alist-get 'artist item) (alist-get 'title item))
+                     (alist-get 'name item)))
+             (unique-name name)
+             (count 1))
+        ;; duplicates
+        (while (gethash unique-name items-map)
+          (cl-incf count)
+          (setq unique-name (format "%s (%d)" name count)))
+        (puthash unique-name item items-map)))
+
+    (let* ((suffix-fn (lambda (cand)
+                        (listen-subsonic--search-suffix (gethash cand items-map))))
+           (group-fn (lambda (cand transform)
+                       (if transform
+                           cand
+                         (alist-get 'subsonic-trype (gethash cand items-map)))))
+           (completion-extra-properties
+            `(:affixation-function ,(listen-subsonic--affixation items-map suffix-fn 'listen-album)
+              :group-function ,group-fn))
+           (selected-name (completing-read "Select: " items-map nil t))
+           (selected-item (gethash selected-name items-map))
+           (type (alist-get 'subsonic-type selected-item))
+           (auth (listen-subsonic--get-auth-params)))
+
+      (pcase type
+        ("Track"
+         ;; add a track to the queue
+         (let ((track (listen-subsonic--json-to-listen selected-item auth)))
+           (listen-queue-add-tracks (list track) queue)
+           (message "Added '%s' to the queue." (listen-track-title track))))
+        (_ ; artist or album
+         (let ((id (alist-get 'id selected-item))
+               (name (alist-get 'name selected-item)))
+           ;; hand over to --find-step
+           (when-let* ((result (listen-subsonic--find-step :directory id name)))
+             (let ((tracks (funcall (nth 0 result))))
+               (listen-queue-add-tracks tracks queue)
+               (message "Added %d tracks from '%s'." (length tracks) name)))))))))
+
 (defun listen-subsonic-queue-search-tracks (query queue)
   "Prompt for a search QUERY, and add its results to the current QUEUE."
   (interactive
-   (list (read-string "Search Subsonic: ")
+   (list (read-string "Search: ")
          (listen-queue-complete :allow-new-p t)))
   (let* ((tracks (listen-subsonic-search-tracks query))
          (track (listen-subsonic--read-track tracks "Select track: ")))
