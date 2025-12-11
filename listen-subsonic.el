@@ -276,21 +276,20 @@ Returns a list of `listen-track's."
               (listen-subsonic--json-to-listen item auth))
             items)))
 
-(defun listen-subsonic--get-all-tracks (id &optional level)
+(defun listen-subsonic--get-all-tracks (id &optional level auth)
   "Fetch all tracks under item associated with ID.
 Returns a list of `listen-track's.
 
 LEVEL determines what level of the hierarchy we are on:
 - :artist: fetches all albums, then all songs by that artist.
 - :album: fetches all songs on the album."
-  ;; TODO: Turn auth into an optional argument rather than let-binding
-  (let ((auth (listen-subsonic--get-auth-params)))
+  (let ((auth (or auth (listen-subsonic--get-auth-params))))
     (pcase level
       (:artist
        (let* ((data (listen-subsonic--api-call "getArtist" `(("id" . ,id))))
               (albums (map-nested-elt data '(artist album))))
          (mapcan (lambda (album)
-                   (listen-subsonic--get-all-tracks (alist-get 'id album) :album))
+                   (listen-subsonic--get-all-tracks (alist-get 'id album) :album auth))
                  albums)))
       (:album
        (let* ((data (listen-subsonic--api-call "getAlbum" `(("id" . ,id))))
