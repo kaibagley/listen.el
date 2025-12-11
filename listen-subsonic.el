@@ -27,6 +27,7 @@
 ;;;; Requirements
 
 ;; TODO: Some kind of indicator to show if track is starred or not
+;; TODO: Send bookmark request to server periodically
 (require 'plz)          ; HTTP requests
 (require 'auth-source)  ; authinfo
 (require 'listen-queue) ; Add tracks to queue
@@ -94,18 +95,6 @@ Used to limit connections to the server.")
 
 ;;;; General helpers
 
-;; TODO: I really don't like this function, can it be destroyed?
-(defun listen-subsonic--ensure-list (item)
-  "Return ITEM as a list.
-If ITEM is:
-- a vector: convert to a list.
-- a list: return ITEM as is.
-- anything else: wrap it in a list."
-  (if (vectorp item)
-      (append item nil)
-    ;; This already exists?
-    (ensure-list item)))
-
 ;;;; Auth helpers
 
 (defun listen-subsonic--get-credentials ()
@@ -159,7 +148,8 @@ Should be called from a buffer containing an API response."
     (error "Subsonic API response is empty"))
   (let* ((json-data (json-parse-buffer :object-type 'alist
                                        :null-object nil
-                                       :false-object nil))
+                                       :false-object nil
+                                       :array-type 'list))
          (response (alist-get 'subsonic-response json-data)))
     (unless (string-equal "ok" (alist-get 'status response))
       (error "Subsonic API response returned error: %s"
@@ -239,7 +229,7 @@ PARAMS are optional API parameters."
   (let* ((response (listen-subsonic--api-call endpoint params))
          (root (alist-get rootkey response))
          (items (alist-get itemkey root)))
-    (listen-subsonic--ensure-list items)))
+    items))
 
 (defun listen-subsonic-search-tracks (query)
   "Search the server for tracks matching QUERY.
@@ -286,37 +276,28 @@ Returns a list of `listen-track's."
               (listen-subsonic--json-to-listen item auth))
             items)))
 
-(defun listen-subsonic--get-all-tracks (id)
-  "Fetch all tracks under directory ID recursively.
+(defun listen-subsonic--get-all-tracks (id &optional level)
+  "Fetch all tracks under item associated with ID.
 Returns a list of `listen-track's.
 
-Makes API calls for each subdirectory under ID, and creates a flat list of tracks.
-Unfortunately this must be recursive, since the \"search3\" uses ID3 IDs, rather than those returned
-by \"getMusicDirectory\"."
-  (let* ((data (listen-subsonic--api-call "getMusicDirectory" `(("id" . ,id))))
-         (parent (alist-get 'directory data))
-         (children (alist-get 'child parent))
-         (auth (listen-subsonic--get-auth-params)))
-    (mapcan (lambda (c)
-              (if (alist-get 'isDir c)
-                  (listen-subsonic--get-all-tracks (alist-get 'id c))
-                (list (listen-subsonic--json-to-listen c auth))))
-            children)))
-
-(defun listen-subsonic--get-folder-tracks (id)
-  "Return all tracks in music folder ID.
-Returns a list of `listen-track's.
-
-Uses the \"search3\" endpoint to retrieve all tracks within ID."
-  (let ((items (listen-subsonic--get-items
-                "search3" 'searchResult3 'song
-                `(("musicFolderId" . ,id)
-                  ("query" . "")
-                  ("songCount" . "100000"))))
-        (auth (listen-subsonic--get-auth-params)))
-    (mapcar (lambda (item)
-              (listen-subsonic--json-to-listen item auth))
-            items)))
+LEVEL determines what level of the hierarchy we are on:
+- :artist: fetches all albums, then all songs by that artist.
+- :album: fetches all songs on the album."
+  ;; TODO: Turn auth into an optional argument rather than let-binding
+  (let ((auth (listen-subsonic--get-auth-params)))
+    (pcase level
+      (:artist
+       (let* ((data (listen-subsonic--api-call "getArtist" `(("id" . ,id))))
+              (albums (map-nested-elt data '(artist album))))
+         (mapcan (lambda (album)
+                   (listen-subsonic--get-all-tracks (alist-get 'id album) :album))
+                 albums)))
+      (:album
+       (let* ((data (listen-subsonic--api-call "getAlbum" `(("id" . ,id))))
+              (tracks (map-nested-elt data '(album song))))
+         (mapcar (lambda (track)
+                   (listen-subsonic--json-to-listen track auth))
+                 tracks))))))
 
 ;;;; Write requests
 
@@ -371,50 +352,41 @@ Should be added to `listen-track-end-functions'."
 Returns a list of alists, each alist representing children of ID.
 
 LEVEL determines the endpoint to use, and may be one of:
-- :root: Returns top-level music folders using endpoint \"getMusicFolders\".
-- :indexes: Returns artist indexes using \"getIndexes\".
-- :directory: Returns children of the specified directory using \"getMusicDirectory\".
-
-ID refers to the folder or \"directory\" (artist or album)."
+- :artists: Returns top-level view of all artists using endpoint \"getArtists\".
+- :artist: Returns albums for an artist using \"getArtist\".
+- :album: Returns songs in an album using \"getAlbum\"."
   (let ((items
          (pcase level
-           (:root
-            (let* ((data (listen-subsonic--api-call "getMusicFolders"))
-                   (items (listen-subsonic--ensure-list
-                           (map-nested-elt data '(musicFolders musicFolder)))))
-              (mapcar (lambda (item) (cons '(isDir . t) item)) items)))
-           (:indexes
-            (let ((data (listen-subsonic--api-call "getIndexes" `(("musicFolderId" . ,id)))))
-              (listen-subsonic--flatten-indexes data)))
-           (:directory
-            (let ((data (listen-subsonic--api-call "getMusicDirectory" `(("id" . ,id)))))
-              (listen-subsonic--ensure-list (map-nested-elt data '(directory child))))))))
-    ;; ensure every item has a 'name
-    (mapcar (lambda (item)
-              (if (alist-get 'title item)
-                  (cons (cons 'name (alist-get 'title item)) item)
-                item))
-            items)))
-
-(defun listen-subsonic--flatten-indexes (json-data)
-  "Flatten the JSON-DATA returned by the \"getIndexes\" endpoint.
-Returns a flat list of artist alists."
-  (let ((idxs (listen-subsonic--ensure-list (map-nested-elt json-data '(indexes index)))))
-    (mapcan (lambda (idx)
-              (let ((artists (listen-subsonic--ensure-list
-                              (alist-get 'artist idx))))
-                (mapcar (lambda (a) (cons '(isDir . t) a)) artists)))
-            idxs)))
+           (:artists
+            (let* ((data (listen-subsonic--api-call "getArtists"))
+                   (indexes (map-nested-elt data '(artists index))))
+              ;; res is organised alphabetically, so we have to flatten
+              (mapcan (lambda (idx)
+                        (let ((artists (alist-get 'artist idx)))
+                          (mapcar (lambda (artist) (cons '(isDir . t) artist)) artists)))
+                      indexes)))
+           (:artist
+            (let* ((data (listen-subsonic--api-call "getArtist" `(("id" . ,id))))
+                   (albums (map-nested-elt data '(artist album))))
+              (mapcar (lambda (album) (cons '(isDir . t) album)) albums)))
+           (:album
+            (let* ((data (listen-subsonic--api-call "getAlbum" `(("id" . ,id))))
+                   (tracks (map-nested-elt data '(album song))))
+              ;; getAlbum tracks dont have "name", the other 2 endpoints do
+              (mapcar (lambda (track)
+                        (cons (cons 'name (alist-get 'title track)) track))
+                      tracks))))))
+    items))
 
 (defun listen-subsonic--browser-next-level (level)
   "Determines the hierarchical level under LEVEL.
 Returns the keyword symbol for the next level.
 
-Hierarchy is: :root -> :indexes -> :directory."
+Hierarchy is: :artists -> :artist -> :album."
   (pcase level
-    (:root :indexes)
-    (:indexes :directory)
-    (_ :directory)))
+    (:artists :artist)
+    (:artist :album)
+    (_ :album)))
 
 (defun listen-subsonic--dired-get-prefix (item)
   "Create a fixed-width string of `ls'-like metadata for ITEM.
@@ -422,8 +394,8 @@ Returns a formatted string of length up to 15 characters.
 
 Example returns:
 - Starred song: \"- * 2004 3:43\"
-- Artist: \"d - ---- ----\"
-- Album: \"d - 2004 ----\""
+- Artist:       \"d - ---- ----\"
+- Album:        \"d - 2004 ----\""
   (let* ((dirp (alist-get 'isDir item))
          (year (alist-get 'year item))
          (duration (alist-get 'duration item))
@@ -559,9 +531,9 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
                    ("songCount" . ,max-results)))
          (response (listen-subsonic--api-call "search3" params))
          (result (alist-get 'searchResult3 response))
-         (artists (listen-subsonic--ensure-list (alist-get 'artist result)))
-         (albums (listen-subsonic--ensure-list (alist-get 'album result)))
-         (tracks (listen-subsonic--ensure-list (alist-get 'song result))))
+         (artists (alist-get 'artist result))
+         (albums (alist-get 'album result))
+         (tracks (alist-get 'song result)))
     (nconc
      (mapcar (lambda (item) (cons '(subsonic-type . "Artist") item)) artists)
      (mapcar (lambda (item) (cons '(subsonic-type . "Album") item)) albums)
@@ -611,7 +583,7 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
            (group-fn (lambda (cand transform)
                        (if transform
                            cand
-                         (alist-get 'subsonic-trype (gethash cand items-map)))))
+                         (alist-get 'subsonic-type (gethash cand items-map)))))
            (completion-extra-properties
             `(:affixation-function ,(listen-subsonic--affixation items-map suffix-fn 'listen-album)
               :group-function ,group-fn))
@@ -628,9 +600,10 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
            (message "Added '%s' to the queue." (listen-track-title track))))
         (_ ; artist or album
          (let ((id (alist-get 'id selected-item))
-               (name (alist-get 'name selected-item)))
+               (name (alist-get 'name selected-item))
+               (next (if (string= type "Artist") :artist :album)))
            ;; hand over to --find-step
-           (when-let* ((result (listen-subsonic--find-step :directory id name)))
+           (when-let* ((result (listen-subsonic--find-step next id name)))
              (let ((tracks (funcall (nth 0 result))))
                (listen-queue-add-tracks tracks queue)
                (message "Added %d tracks from '%s'." (length tracks) name)))))))))
@@ -690,11 +663,11 @@ SOURCE may be one of:
 (defun listen-subsonic-find ()
   "Browse the Subsonic library hierarchy using `completing-read'.
 
-Library hierarchy: Folder -> Artist -> Album -> Song.
+Library hierarchy: Artist -> Album -> Song.
 Select the \"[All]\" option to select all tracks under the current level.
 Select the \"..\" option to move up/back in the hierarchy."
   (interactive)
-  (let ((result (listen-subsonic--find-step :root nil "Root")))
+  (let ((result (listen-subsonic--find-step :artists nil "Root")))
     (when result
       (if (called-interactively-p 'interactive)
           (listen-library (nth 0 result) :name (nth 1 result))
@@ -737,7 +710,7 @@ HISTORY is a stack containint the user's navigation history."
             `(:affixation-function ,(listen-subsonic--affixation
                                      node-map
                                      #'listen-subsonic--suffix-node
-                                     'completion-annotations)
+                                     'completions-annotations)
               :display-sort-function identity
               :cycle-sort-functions identity))
            (sel-name (completing-read prompt node-map nil t))
@@ -751,16 +724,14 @@ HISTORY is a stack containint the user's navigation history."
        ;; "[All]"
        ((eq selection :this)
         (list (lambda ()
-                (pcase level
-                  (:indexes (listen-subsonic--get-folder-tracks id))
-                  (_ (listen-subsonic--get-all-tracks id))))
+                (listen-subsonic--get-all-tracks id level))
               (format "Subsonic: %s" name)))
        ;; Folder/artist/album
        ((and (alist-get 'isDir selection))
         (listen-subsonic--find-step next
-                                      (alist-get 'id selection)
-                                      sel-name
-                                      (cons (list level id name history) history))) ; Add history
+                                    (alist-get 'id selection)
+                                    sel-name
+                                    (cons (list level id name history) history))) ; Add history
        ;; Song
        (t
         (list (lambda () (list (listen-subsonic--json-to-listen selection)))
@@ -818,7 +789,7 @@ Interface opens at the :root level, showing the user's available folders."
   (let ((buf (get-buffer-create "*Listen Subsonic Dired*")))
     (with-current-buffer buf
       (listen-subsonic-dired-mode)
-      (listen-subsonic--dired-render nil "Root" :root)) ;; Start at :root
+      (listen-subsonic--dired-render nil "Root" :artists)) ;; Start at :root
     (switch-to-buffer buf)))
 
 ;; TODO: When emacs 31.1 is released, cl-decf/cl-incf -> decf/incf
@@ -885,9 +856,9 @@ NEXT determines the level the ITEM will link to."
          (pt (point))
          (face (if dirp
                    (pcase listen-subsonic--dired-current-level
-                     (:root 'listen-genre)
-                     (:indexes 'listen-artist)
-                     (t 'listen-album))
+                     (:artists 'listen-artist)
+                     (:artist 'listen-album)
+                     (_ 'listen-album))
                  'listen-title)))
     (insert (propertize prefix 'face 'shadow))
     (insert-text-button
@@ -937,7 +908,7 @@ Inserts a header, navigation buttons and the list of items."
       (dolist (item (listen-subsonic--get-nodes level id))
         (pcase-let ((`(,art-id ,buf ,pos)
                      (listen-subsonic--dired-insert-item item next)))
-          (when (and art-id (not (memq level '(:root :indexes))))
+          (when (and art-id (not (eq level :artists)))
             (listen-subsonic--dired-fetch-art art-id buf pos)))))
     (beginning-of-buffer)
     (listen-subsonic--dired-next-line)))
@@ -948,12 +919,12 @@ Inserts a header, navigation buttons and the list of items."
   "Fetch all tracks in/under the current view and add them to the current queue."
   (interactive)
   (let ((tracks (pcase listen-subsonic--dired-current-level
-                  (:indexes
-                   (listen-subsonic--get-folder-tracks listen-subsonic--dired-current-id))
-                  (:directory
-                   (listen-subsonic--get-all-tracks listen-subsonic--dired-current-id))
+                  (:artist
+                   (listen-subsonic--get-all-tracks listen-subsonic--dired-current-id :artist))
+                  (:album
+                   (listen-subsonic--get-all-tracks listen-subsonic--dired-current-id :album))
                   (_
-                   (user-error "Cannot add all tracks under the current view or the root level")))))
+                   (user-error "Cannot add all tracks under the current view")))))
     (when tracks
       (listen-queue-add-tracks tracks (listen-queue-complete))
       (message "Added %d tracks to the queue." (length tracks)))
