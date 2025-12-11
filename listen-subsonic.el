@@ -667,13 +667,12 @@ Library hierarchy: Artist -> Album -> Song.
 Select the \"[All]\" option to select all tracks under the current level.
 Select the \"..\" option to move up/back in the hierarchy."
   (interactive)
-  (let ((result (listen-subsonic--find-step :artists nil "Root")))
+  (let ((result (listen-subsonic--find-step :artists nil "Library")))
     (when result
       (if (called-interactively-p 'interactive)
           (listen-library (nth 0 result) :name (nth 1 result))
         (funcall (nth 0 result))))))
 
-;; TODO: make prompt show full breadcrumbs
 ;; TODO: propertize everything properly
 (defun listen-subsonic--find-step (level id name &optional history)
   "Recursive browser navigation function for `listen-subsonic-find'.
@@ -684,15 +683,14 @@ HISTORY is a stack containint the user's navigation history."
   (let* ((items (listen-subsonic--get-nodes level id))
          (node-map (make-hash-table :test 'equal))
          (next (listen-subsonic--browser-next-level level))
-         (prompt (if (eq level :root) "Library: " (format "%s: " name))))
+         (prompt (if (eq level :artists)
+                     "Library: "
+                   (let ((path (mapcar (lambda (h) (nth 2 h)) history)))
+                     (format "%s / %s: " (string-join (reverse path) " / ") name)))))
 
     ;; When theres history, add an up option
     (when history
       (puthash (propertize ".." 'face 'shadow) :up node-map))
-
-    ;; Dont show "All" for root
-    (unless (eq level :root)
-      (puthash (propertize "[All]" 'face 'shadow) :this node-map))
 
     ;; Prepare candidates
     (dolist (item items)
@@ -789,7 +787,7 @@ Interface opens at the :root level, showing the user's available folders."
   (let ((buf (get-buffer-create "*Listen Subsonic Dired*")))
     (with-current-buffer buf
       (listen-subsonic-dired-mode)
-      (listen-subsonic--dired-render nil "Root" :artists)) ;; Start at :root
+      (listen-subsonic--dired-render nil "Library" :artists)) ;; Start at :root
     (switch-to-buffer buf)))
 
 ;; TODO: When emacs 31.1 is released, cl-decf/cl-incf -> decf/incf
