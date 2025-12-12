@@ -261,7 +261,7 @@ Should be called from a buffer containing an API response."
              (alist-get 'message (alist-get 'error response))))
     response))
 
-(defun listen-subsonic--api-call (endpoint &optional params callback)
+(defun listen-subsonic--api-call (endpoint &optional params callback body)
   "Make a call to the Subsonic API.
 Returns the parsed JSON if CALLBACK is nil.
 Returns the curl process object if CALLBACK is non-nil.
@@ -277,10 +277,13 @@ The JSON should usually be processed by `listen-subsonic--process-api-response'.
   (unless listen-subsonic-url
     (user-error "Please set `listen-subsonic-url'"))
   (let* ((api-params (append (listen-subsonic--get-auth-params) params))
+         (http-method (if body 'post 'get))
          (api-url (listen-subsonic--build-url endpoint api-params))
-         (api-headers '(("Accept-Encoding" . "gzip"))))
-    (plz 'get api-url
+         (api-headers '(("Accept-Encoding" . "gzip")
+                        ("Content-Type" . "application/x-www-form-urlencoded"))))
+    (plz http-method api-url
       :headers api-headers
+      :body body
       :as #'listen-subsonic--process-api-response
       :then (or callback 'sync)
       :else (lambda (err)
@@ -330,10 +333,10 @@ details.
 ROOTKEY is the top-level JSON key in the API repsonse, ITEMKEY is the
 inner key (for example, \"searchResult3\" and \"song\"). Go to the above link for details.
 PARAMS are optional API parameters."
-  (let ((response (listen-subsonic--api-call endpoint params))
-        (items (map-nested-elt response (list rootkey itemkey))))
+  (when-let* ((response (listen-subsonic--api-call endpoint params))
+              (items (map-nested-elt response (list rootkey itemkey))))
     (mapcar (lambda (item)
-              (listen-subsonic--json-to-listen item (listen-subsonic--get-auth-params)))
+              (listen-subsonic--json-to-listen item))
             items)))
 
 (defun listen-subsonic-search-tracks (query)
@@ -355,8 +358,8 @@ Returns a list of `listen-track's."
 (defun listen-subsonic--get-playlists ()
   "Fetch all of the user's playlists from the server.
 Returns an alist mapping playlist names to their IDs: ((name . id) ...)."
-  (let ((response (listen-subsonic--api-call "getPlaylists"))
-        (items (map-nested-elt response '(playlists playlist))))
+  (when-let* ((response (listen-subsonic--api-call "getPlaylists"))
+              (items (map-nested-elt response '(playlists playlist))))
     (mapcar (lambda (item)
               (cons (alist-get 'name item)
                     (format "%s" (alist-get 'id item))))
@@ -390,6 +393,42 @@ LEVEL determines what level of the hierarchy we are on:
         `(("id" . ,id)))))))
 
 ;;;; Write requests
+
+(defun listen-subsonic--create-playlist (ids name)
+  "Create a playlist with NAME containing IDS on the server.
+Returns the newly created playlist."
+  ;; we have to pass one songId per song
+  (let* ((body-list (cons `("name" ,name)
+                          (mapcar (lambda (id)
+                                    (list "songId" id))
+                                  ids)))
+         (body-str (url-build-query-string body-list nil t)))
+    ;; Use post and put long list of songId params in post body.
+    (unless (string= (alist-get 'status
+                           (listen-subsonic--api-call "createPlaylist"
+                                                      nil nil
+                                                      body-str))
+                     "ok")
+      (user-error "Playlist was not created."))))
+
+(defun listen-subsonic-create-playlist (queue name)
+  "Create a Subsonic playlist named NAME from tracks in QUEUE.
+Returns the response data from a call to \"createPlaylist\".
+
+Only tracks with the source \"subsonic\" will be included."
+  (interactive
+   (list (listen-queue-complete)
+         (read-string "Playlist name: ")))
+  (let ((ids (mapcan (lambda (track)
+                       (let ((etc (listen-track-etc track)))
+                         (when (equal (alist-get 'source etc) "subsonic")
+                           (list (alist-get 'id etc)))))
+                     (listen-queue-tracks queue))))
+    (if ids
+        (progn
+          (listen-subsonic--create-playlist ids name)
+          (message "Created playlist '%s' with %d tracks." name (length ids)))
+      (user-error "No Subsonic tracks found"))))
 
 (defun listen-subsonic--star-item (id star-p &optional callback)
   "Set ID's (artist, album or track) star status according to STAR-P.
@@ -592,7 +631,7 @@ Displays year for directories and albums, and duration for songs."
    ((symbolp node) "")
    ;; album or folder
    ((alist-get 'isDir node)
-    (if-let ((year (alist-get 'year node)))
+    (if-let* ((year (alist-get 'year node)))
         (number-to-string year)
       ""))
    ;; song
@@ -730,6 +769,7 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
                (listen-queue-add-tracks tracks queue)
                (message "Added %d tracks from '%s'." (length tracks) name)))))))))
 
+;; TODO: add dired browser to this?
 (defun listen-library-from-subsonic (&optional source)
   "Show a `listen-library' buffer with content from SOURCE.
 
@@ -771,6 +811,9 @@ SOURCE may be one of:
 
 ;; Completing read browser
 ;; TODO: unify the logic used by the minibuffer browser and the buffer browser
+;; TODO: have this add to queue
+;; FIXME: Fix [All] not appearing in list
+;; FIXME: Affixation function broken. (probably related to mysterious All missing)
 (defun listen-subsonic-find ()
   "Browse the Subsonic library hierarchy using `completing-read'.
 
@@ -908,6 +951,7 @@ If N is nil, the point will move up one line."
               listen-subsonic--dired-current-name nil
               listen-subsonic--dired-current-level nil))
 
+;; TODO: make it easier to add to queue
 (defun listen-subsonic-dired ()
   "Create or switch to the Listen Subsonic Dired buffer.
 
@@ -1090,7 +1134,7 @@ If button at point is a track, add it to the current queue."
 
 Pops the previous state from `listen-subsonic--dired-history'."
   (interactive)
-  (if-let ((prev (pop listen-subsonic--dired-history)))
+  (if-let* ((prev (pop listen-subsonic--dired-history)))
       (listen-subsonic--dired-render (nth 0 prev) (nth 1 prev) (nth 2 prev))
     (message "This is the highest level.")))
 
