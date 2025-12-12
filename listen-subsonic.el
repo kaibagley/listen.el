@@ -400,25 +400,18 @@ LEVEL determines what level of the hierarchy we are on:
 
 ;;;; Write requests
 
-(defun listen-subsonic-star-track (track star-p)
-  "Set TRACK's star status according to STAR-P.
+(defun listen-subsonic--star-item (id star-p &optional callback)
+  "Set ID's (artist, album or track) star status according to STAR-P.
 Returns the unparsed API response.
 
 Send a request to the \"star\" or \"unstar\" Subsonic endpoints, star (when STAR-P is non-nil) or
-unstar TRACK.
-When called interactively, the star-state of the song will be toggled.
+unstar ID. CALLBACK is passed to `listen-subsonic--api-call' and is evaluated on the response data.
 
-This function also sets TRACK's metadata accordingly."
-  (interactive
-   (let ((track (listen-queue-complete-track (listen-queue-complete))))
-     (list track (not (alist-get 'starred (listen-track-etc track))))))
-  (when-let* ((id (alist-get 'id (listen-track-etc track))))
-    (listen-subsonic--api-call (if star-p "star" "unstar")
-                               `(("id" . ,id))
-                               (lambda (_)
-                                 (setf (alist-get 'starred (listen-track-etc track)) star-p)
-                                 (message "%s '%s'" (if star-p "Starred" "Unstarred")
-                                          (listen-track-title track))))))
+This function does not set the corresponding item's star status locally. Perhaps use CALLBACK for
+this."
+  (listen-subsonic--api-call (if star-p "star" "unstar")
+                             `(("id" . ,id))
+                             callback))
 
 (defun listen-subsonic--scrobble (player submission-p)
   "Scrobble the current track playing in PLAYER's queue to the Subsonic API.
@@ -515,6 +508,29 @@ Returns nil, only displaying a success or failure message."
   (if (listen-subsonic--api-call "ping")
       (message "Successfully pinged Subsonic server!")
     (message "Failed to ping server.")))
+
+(defun listen-subsonic-star-track (track star-p)
+  "Set TRACK's star status according to STAR-P.
+Returns the unparsed API response.
+
+When called interactively, the star-state of the currently playing track will be toggled.
+Send a request to the \"star\" or \"unstar\" Subsonic endpoints, star (when STAR-P is non-nil) or
+unstar TRACK.
+
+This function also sets TRACK's in-memory star status accordingly."
+  (interactive
+   (let ((track (listen-current-track)))
+     (unless track
+       (user-error "No track playing."))
+     (list track (not (alist-get 'starred (listen-track-etc track))))))
+  (when-let* ((id (alist-get 'id (listen-track-etc track))))
+    (listen-subsonic--star-item id
+                                star-p
+                                ;; update track in-memory
+                                (lambda (_)
+                                  (setf (alist-get 'starred (listen-track-etc track)) star-p)
+                                  (message "%s '%s'" (if star-p "Starred" "Unstarred")
+                                           (listen-track-title track))))))
 
 (defun listen-subsonic--read-playlist ()
   "Prompt user to select a Subsonic playlist using `completing-read'.
@@ -857,6 +873,24 @@ If N is nil, the point will move up one line."
   (interactive)
   (listen-subsonic--dired-next-line (- 0 (or n 1))))
 
+(defun listen-subsonic--dired-star ()
+  "Star/unstar the track, album or artist at point."
+  (interactive)
+  (let* ((pt (point))
+         (item (get-text-property pt 'subsonic-item))
+         ;; save buffer context for the callback
+         (buf (current-buffer)))
+    (unless item
+      (user-error "No item on this line"))
+
+    (let* ((id (alist-get 'id item))
+           (star-p (not (alist-get 'starred item))))
+      (listen-subsonic--star-item id star-p
+                                  (lambda (_)
+                                    (with-current-buffer buf
+                                      (revert-buffer)
+                                      (message "%s" (if star-p "Starred" "Unstarred"))))))))
+
 (defvar listen-subsonic-dired-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "^") #'listen-subsonic--dired-up)
@@ -864,6 +898,7 @@ If N is nil, the point will move up one line."
     (define-key map (kbd "A") #'listen-subsonic--dired-add-all)
     (define-key map (kbd "n") #'listen-subsonic--dired-next-line)
     (define-key map (kbd "p") #'listen-subsonic--dired-prev-line)
+    (define-key map (kbd "S") #'listen-subsonic--dired-star)
     (define-key map [remap next-line] #'listen-subsonic--dired-next-line)
     (define-key map [remap previous-line] #'listen-subsonic--dired-prev-line)
     map)
