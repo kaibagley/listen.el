@@ -321,20 +321,6 @@ Returns a `listen-track' struct."
 
 ;;;; Read requests
 
-(defun listen-subsonic--get-items (endpoint rootkey itemkey &optional params)
-  "Get data from ENDPOINT and extract the contents of ROOTKEY, then ITEMKEY.
-Returns a list of alists representing the items.
-
-ENDPOINT is the API method name, see `https://www.navidrome.org/docs/developers/subsonic-api/' for
-details.
-ROOTKEY is the top-level JSON key in the API repsonse, ITEMKEY is the
-inner key (for example, \"searchResult3\" and \"song\"). Go to the above link for details.
-PARAMS are optional API parameters."
-  (let* ((response (listen-subsonic--api-call endpoint params))
-         (root (alist-get rootkey response))
-         (items (alist-get itemkey root)))
-    items))
-
 (defun listen-subsonic--get-tracks (endpoint rootkey itemkey &optional params)
   "Get data from ENDPOINT, and extract `listen-track's using ROOTKEY and ITEMKEY.
 Returns a list of `listen-track's.
@@ -344,7 +330,8 @@ details.
 ROOTKEY is the top-level JSON key in the API repsonse, ITEMKEY is the
 inner key (for example, \"searchResult3\" and \"song\"). Go to the above link for details.
 PARAMS are optional API parameters."
-  (let ((items (listen-subsonic--get-items endpoint rootkey itemkey params)))
+  (let ((response (listen-subsonic--api-call endpoint params))
+        (items (map-nested-elt response (list rootkey itemkey))))
     (mapcar (lambda (item)
               (listen-subsonic--json-to-listen item (listen-subsonic--get-auth-params)))
             items)))
@@ -368,8 +355,8 @@ Returns a list of `listen-track's."
 (defun listen-subsonic--get-playlists ()
   "Fetch all of the user's playlists from the server.
 Returns an alist mapping playlist names to their IDs: ((name . id) ...)."
-  (let ((items (listen-subsonic--get-items
-                "getPlaylists" 'playlists 'playlist)))
+  (let ((response (listen-subsonic--api-call "getPlaylists"))
+        (items (map-nested-elt response '(playlists playlist))))
     (mapcar (lambda (item)
               (cons (alist-get 'name item)
                     (format "%s" (alist-get 'id item))))
