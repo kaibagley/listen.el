@@ -331,29 +331,35 @@ PARAMS are optional API parameters."
          (items (alist-get itemkey root)))
     items))
 
+(defun listen-subsonic--get-tracks (endpoint rootkey itemkey &optional params)
+  "Get data from ENDPOINT, and extract `listen-track's using ROOTKEY and ITEMKEY.
+Returns a list of `listen-track's.
+
+ENDPOINT is the API method name, see `https://www.navidrome.org/docs/developers/subsonic-api/' for
+details.
+ROOTKEY is the top-level JSON key in the API repsonse, ITEMKEY is the
+inner key (for example, \"searchResult3\" and \"song\"). Go to the above link for details.
+PARAMS are optional API parameters."
+  (let ((items (listen-subsonic--get-items endpoint rootkey itemkey params))
+        (auth (listen-subsonic--get-auth-params)))
+    (mapcar (lambda (item)
+              (listen-subsonic--json-to-listen item auth))
+            items)))
+
 (defun listen-subsonic-search-tracks (query)
   "Search the server for tracks matching QUERY.
 Returns a list of `listen-track's.
 
 Uses the Subsonic API's \"search3\" endpoint with QUERY as the search query."
-  (let ((items (listen-subsonic--get-items
-                "search3" 'searchResult3 'song
-                `(("query" . ,query)
-                  ("songCount" . ,(number-to-string listen-subsonic-search-max-results)))))
-        (auth (listen-subsonic--get-auth-params)))
-    (mapcar (lambda (item)
-              (listen-subsonic--json-to-listen item auth))
-            items)))
+  (listen-subsonic--get-tracks
+   "search3" 'searchResult3 'song
+   `(("query" . ,query)
+     ("songCount" . ,(number-to-string listen-subsonic-search-max-results)))))
 
 (defun listen-subsonic-get-starred-tracks ()
   "Fetch all starred songs from the server.
 Returns a list of `listen-track's."
-  (let ((items (listen-subsonic--get-items
-                "getStarred2" 'starred2 'song))
-        (auth (listen-subsonic--get-auth-params)))
-    (mapcar (lambda (item)
-              (listen-subsonic--json-to-listen item auth))
-            items)))
+  (listen-subsonic--get-tracks "getStarred2" 'starred2 'song))
 
 (defun listen-subsonic--get-playlists ()
   "Fetch all of the user's playlists from the server.
@@ -368,13 +374,9 @@ Returns an alist mapping playlist names to their IDs: ((name . id) ...)."
 (defun listen-subsonic--get-playlist-tracks (id)
   "Fetch all tracks in playlist with ID.
 Returns a list of `listen-track's."
-  (let ((items (listen-subsonic--get-items
-                "getPlaylist" 'playlist 'entry
-                `(("id" . ,id))))
-        (auth (listen-subsonic--get-auth-params)))
-    (mapcar (lambda (item)
-              (listen-subsonic--json-to-listen item auth))
-            items)))
+  (listen-subsonic--get-tracks
+   "getPlaylist" 'playlist 'entry
+   `(("id" . ,id))))
 
 (defun listen-subsonic--get-all-tracks (id &optional level auth)
   "Fetch all tracks under item associated with ID.
