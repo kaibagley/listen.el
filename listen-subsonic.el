@@ -539,22 +539,47 @@ Returns the selected playlist's ID as a string."
          (name (completing-read "Playlist: " playlists nil t)))
     (alist-get name playlists nil nil #'equal)))
 
-(defun listen-subsonic--affixation (hashtable suffix-fn &optional face)
+(defun listen-subsonic--affixation (hashtable suffix-fn &optional suffix-face prefix-fn prefix-face)
   "Create an affixation function for `completing-read' candidates in HASHTABLE.
 Returns an affixation function which maps a list of candidates to a list of suffixes.
 
 SUFFIX-FN returns the suffix string from the object found in HASHTABLE.
-FACE is applied to the suffix."
+SUFFIX-FACE is applied to the suffix.
+PREFIX-FN returns a 1 character width prefix string from the object found in HASHTABLE.
+PREFIX-FACE is applied to the prefix."
   (lambda (cands)
     (mapcar (lambda (cand)
               (let* ((item (gethash cand hashtable))
                      (len (string-width cand))
                      (padding (make-string (max 5 (- 40 len)) ?\s))
-                     (suffix (or (funcall suffix-fn item) "")))
+                     (suffix (or (funcall suffix-fn item) ""))
+                     (prefix (or (funcall prefix-fn item) "")))
                 (list cand
-                      ""
-                      (concat padding (propertize suffix 'face face)))))
+                      (propertize prefix 'face prefix-face)
+                      (concat padding (propertize suffix 'face suffix-face)))))
             cands)))
+
+(defun listen-subsonic--search-suffix (item)
+  "Return a suffix string for ITEM type.
+
+ITEM must include element with `car' \"subsonic-type\" for determining which suffix to use."
+  (pcase (alist-get 'subsonic-type item)
+    ("Artist" "")
+    ("Album" (concat (alist-get 'artist item)
+                     (when-let* ((year (alist-get 'year item)))
+                       (format " (%s)" year))))
+    ("Track" (concat (alist-get 'artist item)
+                     " - "
+                     (alist-get 'album item)
+                     (format " (%s)" (listen-format-seconds (or (alist-get 'duration item) 0)))))))
+
+(defun listen-subsonic--search-prefix (item)
+  "Return a prefix string for ITEM type.
+
+ITEM must include element with `car' \"starred\"."
+  (if (alist-get 'starred item)
+      (concat (svg-lib-icon "star" 'listen-starred))
+    "  "))
 
 (defun listen-subsonic--suffix-track (track)
   "Return TRACK's album name to be used as an `affixation-function' suffix."
@@ -603,7 +628,8 @@ Handles duplicate names by appending a counter."
             `(:affixation-function
               ,(listen-subsonic--affixation track-map
                                             #'listen-subsonic--suffix-track
-                                            'listen-album)))
+                                            'listen-album
+                                            #'listen-subsonic--prefix-track)))
            (selected-name (completing-read prompt track-map nil t)))
       (gethash selected-name track-map))))
 
@@ -654,18 +680,6 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
      (mapcar (lambda (item) (cons '(subsonic-type . "Album") item)) albums)
      (mapcar (lambda (item) (cons '(subsonic-type . "Track") item)) tracks))))
 
-(defun listen-subsonic--search-suffix (item)
-  "Return a suffix string for ITEM type."
-  (pcase (alist-get 'subsonic-type item)
-    ("Artist" "")
-    ("Album" (concat (alist-get 'artist item)
-                     (when-let* ((year (alist-get 'year item)))
-                       (format " (%s)" year))))
-    ("Track" (concat (alist-get 'artist item)
-                     " - "
-                     (alist-get 'album item)
-                     (format " (%s)" (listen-format-seconds (or (alist-get 'duration item) 0)))))))
-
 (defun listen-subsonic-search (query)
   "Search the server for QUERY, and display artists, albums and tracks.
 
@@ -690,17 +704,23 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
         ;; duplicates
         (while (gethash unique-name items-map)
           (cl-incf count)
-          (setq unique-name (format "%s (%d)" name count)))
+          (setq unique-name (format "%s %s"
+                                    name
+                                    (propertize (format "(%d)" count) 'face 'shadow))))
         (puthash unique-name item items-map)))
 
     (let* ((suffix-fn (lambda (cand)
                         (listen-subsonic--search-suffix (gethash cand items-map))))
+           (prefix-fn (lambda (cand)
+                        (listen-subsonic--search-prefix (gethash cand items-map))))
            (group-fn (lambda (cand transform)
                        (if transform
                            cand
                          (alist-get 'subsonic-type (gethash cand items-map)))))
            (completion-extra-properties
-            `(:affixation-function ,(listen-subsonic--affixation items-map suffix-fn 'listen-album)
+            `(:affixation-function ,(listen-subsonic--affixation items-map
+                                                                 suffix-fn 'listen-album
+                                                                 prefix-fn)
               :group-function ,group-fn))
            (selected-name (completing-read "Select: " items-map nil t))
            (selected-item (gethash selected-name items-map))
