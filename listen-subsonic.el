@@ -216,7 +216,7 @@ Return an alist of strings: ((\"u\" . \"myusername\") (\"t\" . \"<randomstring>\
              (user (plist-get creds :user))
              (pass (funcall (plist-get creds :secret)))
              (salt (format "%06x" (random #xffffff)))
-             (token (md5 (concat pass salt))))
+             (token (secure-hash 'md5 (concat pass salt))))
         `(("u" . ,user)
           ("t" . ,token)
           ("s" . ,salt)
