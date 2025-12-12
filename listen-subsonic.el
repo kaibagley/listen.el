@@ -123,6 +123,7 @@
 ;; TODO: Some kind of indicator to show if track is starred or not
 ;; TODO: Send bookmark request to server periodically
 ;; TODO: When emacs 31.1 is released, cl-decf/cl-incf -> decf/incf
+;; TODO: Create playlist from queue
 
 (require 'plz)          ; HTTP requests
 (require 'auth-source)  ; authinfo
@@ -190,6 +191,12 @@ Used to keep concurrent downloads below `listen-subsonic--art-max'.")
   "Max allowed concurrent downloads.
 Used to limit connections to the server.")
 
+(defvar listen-subsonic--auth-params nil
+  "The authentication URL parameters.
+This should not be set globally.
+For batch operations, this is let-bound.
+For other operations, generate on the fly using `listen-subsonic--get-auth-params'.")
+
 ;;;; General helpers
 
 ;;;; Auth helpers
@@ -204,17 +211,18 @@ Searches `auth-source' files for an entry with \":host\" matching `listen-subson
 (defun listen-subsonic--get-auth-params ()
   "Return authentication info for Subsonic API calls.
 Return an alist of strings: ((\"u\" . \"myusername\") (\"t\" . \"<randomstring>\") ...)."
-  (let* ((creds (listen-subsonic--get-credentials))
-         (user (plist-get creds :user))
-         (pass (funcall (plist-get creds :secret)))
-         (salt (format "%06x" (random #xffffff)))
-         (token (md5 (concat pass salt))))
-    `(("u" . ,user)
-      ("t" . ,token)
-      ("s" . ,salt)
-      ("v" . "1.16.1")
-      ("c" . ,listen-subsonic-user-agent)
-      ("f" . "json"))))
+  (or listen-subsonic--auth-params
+      (let* ((creds (listen-subsonic--get-credentials))
+             (user (plist-get creds :user))
+             (pass (funcall (plist-get creds :secret)))
+             (salt (format "%06x" (random #xffffff)))
+             (token (md5 (concat pass salt))))
+        `(("u" . ,user)
+          ("t" . ,token)
+          ("s" . ,salt)
+          ("v" . "1.16.1")
+          ("c" . ,listen-subsonic-user-agent)
+          ("f" . "json")))))
 
 (defun listen-subsonic--build-url (endpoint params)
   "Build a Subsonic REST API URL from ENDPOINT and PARAMS.
@@ -281,26 +289,22 @@ The JSON should usually be processed by `listen-subsonic--process-api-response'.
 
 ;;;; Data formatting
 
-(defun listen-subsonic--get-stream-url (id &optional auth-params)
+(defun listen-subsonic--get-stream-url (id)
   "Create a streaming URL for track with ID.
-Returns a complete URL for MPV or VLC to directly stream from the server.
-
-If AUTH-PARAMS is nil, new auth params are generated."
+Returns a complete URL for MPV or VLC to directly stream from the server."
   (listen-subsonic--build-url
    "stream"
-   (append (or auth-params (listen-subsonic--get-auth-params))
+   (append (listen-subsonic--get-auth-params)
            `(("id" . ,id)))))
 
-(defun listen-subsonic--json-to-listen (json-data &optional auth-params)
+(defun listen-subsonic--json-to-listen (json-data)
   "Convert Subsonic JSON-DATA into a `listen-track'.
-Returns a `listen-track' struct.
-
-If AUTH-PARAMS is nil, new auth params are generated."
+Returns a `listen-track' struct."
   (map-let
       (('id id) ('userRating rating) artist title album track genre duration year starred)
       json-data
     (make-listen-track
-     :filename (listen-subsonic--get-stream-url id auth-params) ; silly mpv
+     :filename (listen-subsonic--get-stream-url id) ; silly mpv
      :artist artist
      :title title
      :album album
@@ -340,10 +344,9 @@ details.
 ROOTKEY is the top-level JSON key in the API repsonse, ITEMKEY is the
 inner key (for example, \"searchResult3\" and \"song\"). Go to the above link for details.
 PARAMS are optional API parameters."
-  (let ((items (listen-subsonic--get-items endpoint rootkey itemkey params))
-        (auth (listen-subsonic--get-auth-params)))
+  (let ((items (listen-subsonic--get-items endpoint rootkey itemkey params)))
     (mapcar (lambda (item)
-              (listen-subsonic--json-to-listen item auth))
+              (listen-subsonic--json-to-listen item (listen-subsonic--get-auth-params)))
             items)))
 
 (defun listen-subsonic-search-tracks (query)
@@ -359,7 +362,8 @@ Uses the Subsonic API's \"search3\" endpoint with QUERY as the search query."
 (defun listen-subsonic-get-starred-tracks ()
   "Fetch all starred songs from the server.
 Returns a list of `listen-track's."
-  (listen-subsonic--get-tracks "getStarred2" 'starred2 'song))
+  (listen-subsonic--get-tracks
+   "getStarred2" 'starred2 'song))
 
 (defun listen-subsonic--get-playlists ()
   "Fetch all of the user's playlists from the server.
@@ -378,27 +382,25 @@ Returns a list of `listen-track's."
    "getPlaylist" 'playlist 'entry
    `(("id" . ,id))))
 
-(defun listen-subsonic--get-all-tracks (id &optional level auth)
+(defun listen-subsonic--get-all-tracks (id &optional level)
   "Fetch all tracks under item associated with ID.
 Returns a list of `listen-track's.
 
 LEVEL determines what level of the hierarchy we are on:
 - :artist: fetches all albums, then all songs by that artist.
 - :album: fetches all songs on the album."
-  (let ((auth (or auth (listen-subsonic--get-auth-params))))
+  (let ((listen-subsonic--auth-params (listen-subsonic--get-auth-params)))
     (pcase level
       (:artist
        (let* ((data (listen-subsonic--api-call "getArtist" `(("id" . ,id))))
               (albums (map-nested-elt data '(artist album))))
          (mapcan (lambda (album)
-                   (listen-subsonic--get-all-tracks (alist-get 'id album) :album auth))
+                   (listen-subsonic--get-all-tracks (alist-get 'id album) :album))
                  albums)))
       (:album
-       (let* ((data (listen-subsonic--api-call "getAlbum" `(("id" . ,id))))
-              (tracks (map-nested-elt data '(album song))))
-         (mapcar (lambda (track)
-                   (listen-subsonic--json-to-listen track auth))
-                 tracks))))))
+       (listen-subsonic--get-tracks
+        "getAlbum" 'album 'song
+        `(("id" . ,id)))))))
 
 ;;;; Write requests
 
@@ -644,13 +646,9 @@ Handles duplicate names by appending a counter."
    (list
     (read-number "Number of songs: " 10)
     (listen-queue-complete :allow-new-p t)))
-  (let* ((items (listen-subsonic--get-items
-                 "getRandomSongs" 'randomSongs 'song
-                 `(("size" . ,(number-to-string n)))))
-         (auth (listen-subsonic--get-auth-params))
-         (tracks (mapcar (lambda (item)
-                           (listen-subsonic--json-to-listen item auth))
-                         items)))
+  (let* ((tracks (listen-subsonic--get-tracks
+                  "getRandomSongs" 'randomSongs 'song
+                  `(("size" . ,(number-to-string n))))))
     (listen-queue-add-tracks tracks queue)))
 
 (defun listen-subsonic-queue-playlist (queue)
@@ -727,13 +725,12 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
               :group-function ,group-fn))
            (selected-name (completing-read "Select: " items-map nil t))
            (selected-item (gethash selected-name items-map))
-           (type (alist-get 'subsonic-type selected-item))
-           (auth (listen-subsonic--get-auth-params)))
+           (type (alist-get 'subsonic-type selected-item)))
 
       (pcase type
         ("Track"
          ;; add a track to the queue
-         (let ((track (listen-subsonic--json-to-listen selected-item auth)))
+         (let ((track (listen-subsonic--json-to-listen selected-item)))
            (listen-queue-add-tracks (list track) queue)
            (message "Added '%s' to the queue." (listen-track-title track))))
         (_ ; artist or album
@@ -975,9 +972,10 @@ Art is asynchronously displayed in the Listen Subsonic Dired buffer as it is dow
   (unless (file-exists-p listen-subsonic-cache-dir)
     (make-directory listen-subsonic-cache-dir))
   (let ((file (expand-file-name (format "%s.jpg" id) listen-subsonic-cache-dir))
-        (url (listen-subsonic--build-url "getCoverArt"
-                                         (append (listen-subsonic--get-auth-params)
-                                                 `(("id" . ,id) ("size" . "64"))))))
+        (url (listen-subsonic--build-url
+              "getCoverArt"
+              (append (listen-subsonic--get-auth-params)
+                      `(("id" . ,id) ("size" . "64"))))))
     (if (file-exists-p file)
         ;; cached
         (listen-subsonic--display-art file buf pos)
