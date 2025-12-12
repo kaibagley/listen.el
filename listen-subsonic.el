@@ -275,7 +275,7 @@ The JSON should usually be processed by `listen-subsonic--process-api-response'.
       :headers api-headers
       :as #'listen-subsonic--process-api-response
       :then (or callback 'sync)
-      :else (lambda (plz-err)
+      :else (lambda (err)
               (message "Subsonic API request error: %s"
                        (status (plz-response-status (plz-error-response err))))))))
 
