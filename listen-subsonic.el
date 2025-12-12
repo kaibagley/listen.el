@@ -730,18 +730,6 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
                (listen-queue-add-tracks tracks queue)
                (message "Added %d tracks from '%s'." (length tracks) name)))))))))
 
-(defun listen-subsonic-queue-search-tracks (query queue)
-  "Prompt for a search QUERY, and add its results to the current QUEUE."
-  (interactive
-   (list (read-string "Search: ")
-         (listen-queue-complete :allow-new-p t)))
-  (let* ((tracks (listen-subsonic-search-tracks query))
-         (track (listen-subsonic--read-track tracks "Select track: ")))
-    (progn
-      (listen-queue-add-tracks (list track) queue)
-      (message "Added '%s' to queue." (listen-track-title track)))
-    (message "No tracks selected or found.")))
-
 (defun listen-library-from-subsonic (&optional source)
   "Show a `listen-library' buffer with content from SOURCE.
 
