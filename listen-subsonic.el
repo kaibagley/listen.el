@@ -564,12 +564,12 @@ PREFIX-FACE is applied to the prefix."
 
 ITEM must include element with `car' \"subsonic-type\" for determining which suffix to use."
   (pcase (alist-get 'subsonic-type item)
-    ("Artist" "")
+    ("Artist" (format "%s albums" (alist-get 'albumCount item)))
     ("Album" (concat (alist-get 'artist item)
                      (when-let* ((year (alist-get 'year item)))
                        (format " (%s)" year))))
     ("Track" (concat (alist-get 'artist item)
-                     " - "
+                     " / "
                      (alist-get 'album item)
                      (format " (%s)" (listen-format-seconds (or (alist-get 'duration item) 0)))))))
 
@@ -577,9 +577,12 @@ ITEM must include element with `car' \"subsonic-type\" for determining which suf
   "Return a prefix string for ITEM type.
 
 ITEM must include element with `car' \"starred\"."
-  (if (alist-get 'starred item)
-      (concat (svg-lib-icon "star" 'listen-starred))
-    "  "))
+  (format "%s "
+         (if (alist-get 'starred item)
+             (propertize " " 'display
+                         (svg-lib-icon "star" 'listen-starred
+                                       :stroke 0 :margin -2 :background nil))
+           " ")))
 
 (defun listen-subsonic--suffix-track (track)
   "Return TRACK's album name to be used as an `affixation-function' suffix."
@@ -697,7 +700,7 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
     (dolist (item items)
       (let* ((type (alist-get 'subsonic-type item))
              (name (if (string= type "Track")
-                       (format "%s - %s" (alist-get 'artist item) (alist-get 'title item))
+                       (alist-get 'title item)
                      (alist-get 'name item)))
              (unique-name name)
              (count 1))
@@ -709,10 +712,8 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
                                     (propertize (format "(%d)" count) 'face 'shadow))))
         (puthash unique-name item items-map)))
 
-    (let* ((suffix-fn (lambda (cand)
-                        (listen-subsonic--search-suffix (gethash cand items-map))))
-           (prefix-fn (lambda (cand)
-                        (listen-subsonic--search-prefix (gethash cand items-map))))
+    (let* ((suffix-fn #'listen-subsonic--search-suffix)
+           (prefix-fn #'listen-subsonic--search-prefix)
            (group-fn (lambda (cand transform)
                        (if transform
                            cand
@@ -809,7 +810,6 @@ Select the \"..\" option to move up/back in the hierarchy."
           (listen-library (nth 0 result) :name (nth 1 result))
         (funcall (nth 0 result))))))
 
-;; TODO: propertize everything properly
 (defun listen-subsonic--find-step (level id name &optional history)
   "Recursive browser navigation function for `listen-subsonic-find'.
 Returns a list (function name) for the selected action, or nil to go up/back.
@@ -934,7 +934,6 @@ If N is nil, the point will move up one line."
               listen-subsonic--dired-current-name nil
               listen-subsonic--dired-current-level nil))
 
-;; TODO: Allow user to star items with a keybind from this menu
 (defun listen-subsonic-dired ()
   "Create or switch to the Listen Subsonic Dired buffer.
 
