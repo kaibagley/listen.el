@@ -20,6 +20,101 @@
 
 ;;; Commentary:
 
+;; * OpenSubsonic API Implementation
+;; ** 1.0.0
+;; - [ ] download
+;; - [ ] getCoverArt
+;; - [ ] getIndexes
+;; - [ ] getLicense
+;; - [ ] getMusicDirectory
+;; - [ ] getMusicFolders
+;; - [ ] getNowPlaying
+;; - [X] getPlaylist
+;; - [X] getPlaylists
+;; - [X] ping
+;; - [ ] search
+;; - [X] stream
+;; ** 1.1.0
+;; - [ ] changePassword
+;; - [ ] createUser
+;; ** 1.2.0
+;; - [ ] addChatMessage
+;; - [ ] createPlaylist
+;; - [ ] deletePlaylist
+;; - [ ] getAlbumList
+;; - [ ] getChatMessages
+;; - [ ] getLyrics
+;; - [X] getRandomSongs
+;; - [ ] jukeboxControl
+;; ** 1.3.0
+;; - [ ] deleteUser
+;; - [ ] getUser
+;; ** 1.4.0
+;; - [ ] search2
+;; ** 1.5.0
+;; - [X] scrobble
+;; ** 1.6.0
+;; - [ ] createShare
+;; - [ ] deleteShare
+;; - [ ] getPodcasts
+;; - [ ] getShares
+;; - [X] setRating
+;; - [ ] updateShare
+;; ** 1.8.0
+;; - [X] getAlbum
+;; - [ ] getAlbumList2
+;; - [X] getArtist
+;; - [X] getArtists
+;; - [ ] getAvatar
+;; - [ ] getSong
+;; - [ ] getStarred
+;; - [X] getStarred2
+;; - [ ] getUsers
+;; - [ ] getVideos
+;; - [ ] hls
+;; - [X] search3
+;; - [X] star
+;; - [X] unstar
+;; - [ ] updatePlaylist
+;; ** 1.9.0
+;; - [ ] createBookmark
+;; - [ ] createPodcastChannel
+;; - [ ] deleteBookmark
+;; - [ ] deletePodcastChannel
+;; - [ ] deletePodcastEpisode
+;; - [ ] downloadPodcastEpisode
+;; - [ ] getBookmarks
+;; - [ ] getGenres
+;; - [ ] getInternetRadioStations
+;; - [ ] getSongsByGenre
+;; - [ ] refreshPodcasts
+;; ** 1.10.1
+;; - [ ] updateUser
+;; ** 1.11.0
+;; - [ ] getArtistInfo
+;; - [ ] getArtistInfo2
+;; - [ ] getSimilarSongs
+;; - [ ] getSimilarSongs2
+;; ** 1.12.0(100.0%)
+;; - [ ] getPlayQueue
+;; - [ ] savePlayQueue
+;; ** 1.13.0
+;; - [ ] getNewestPodcasts
+;; - [ ] getTopSongs
+;; ** 1.14.0
+;; - [ ] getAlbumInfo
+;; - [ ] getAlbumInfo2
+;; - [ ] getCaptions
+;; - [ ] getVideoInfo
+;; ** 1.15.0
+;; - [ ] getScanStatus
+;; - [ ] startScan
+;; ** 1.16.0
+;; - [ ] createInternetRadioStation
+;; - [ ] deleteInternetRadioStation
+;; - [ ] updateInternetRadioStation
+
+
 ;;
 
 ;;; Code:
@@ -249,7 +344,7 @@ Uses the Subsonic API's \"search3\" endpoint with QUERY as the search query."
   "Fetch all starred songs from the server.
 Returns a list of `listen-track's."
   (let ((items (listen-subsonic--get-items
-                "getStarred" 'starred 'song))
+                "getStarred2" 'starred2 'song))
         (auth (listen-subsonic--get-auth-params)))
     (mapcar (lambda (item)
               (listen-subsonic--json-to-listen item auth))
