@@ -114,7 +114,6 @@
 ;; - [ ] deleteInternetRadioStation
 ;; - [ ] updateInternetRadioStation
 
-
 ;;
 
 ;;; Code:
@@ -123,9 +122,12 @@
 
 ;; TODO: Some kind of indicator to show if track is starred or not
 ;; TODO: Send bookmark request to server periodically
+;; TODO: When emacs 31.1 is released, cl-decf/cl-incf -> decf/incf
+
 (require 'plz)          ; HTTP requests
 (require 'auth-source)  ; authinfo
 (require 'listen-queue) ; Add tracks to queue
+(require 'svg-lib)      ; For starred icon
 
 (require 'map)          ; for map-let and map-elt
 (require 'url-util)     ; for url-build-query-string
@@ -272,7 +274,10 @@ The JSON should usually be processed by `listen-subsonic--process-api-response'.
     (plz 'get api-url
       :headers api-headers
       :as #'listen-subsonic--process-api-response
-      :then (or callback 'sync))))
+      :then (or callback 'sync)
+      :else (lambda (plz-err)
+              (message "Subsonic API request error: %s"
+                       (status (plz-response-status (plz-error-response err))))))))
 
 ;;;; Data formatting
 
@@ -745,6 +750,7 @@ SOURCE may be one of:
     (listen-library tracks-fn
                     :name (format "Subsonic: %s" source))))
 
+;; TODO: Make this send a clear cache request to server too?
 (defun listen-subsonic-clear-cache ()
   "Delete the Subsonic cache directory and its contents."
   (interactive)
@@ -873,6 +879,7 @@ If N is nil, the point will move up one line."
               listen-subsonic--dired-current-name nil
               listen-subsonic--dired-current-level nil))
 
+;; TODO: Allow user to star items with a keybind from this menu
 (defun listen-subsonic-dired ()
   "Create or switch to the Listen Subsonic Dired buffer.
 
@@ -881,10 +888,9 @@ Interface opens at the :root level, showing the user's available folders."
   (let ((buf (get-buffer-create "*Listen Subsonic Dired*")))
     (with-current-buffer buf
       (listen-subsonic-dired-mode)
-      (listen-subsonic--dired-render nil "Library" :artists)) ;; Start at :root
+      (listen-subsonic--dired-render nil "Library" :artists))
     (switch-to-buffer buf)))
 
-;; TODO: When emacs 31.1 is released, cl-decf/cl-incf -> decf/incf
 (defun listen-subsonic--process-art-queue ()
   "Asynchronously process background art queue.
 
@@ -1031,7 +1037,7 @@ If button at point is a track, add it to the current queue."
   (let* ((pt (if button (button-start button) (point)))
          (item (get-text-property pt 'subsonic-item))
          (next (get-text-property pt 'subsonic-next)))
-    (unless item (user-error "No item at point"))
+    (unless item (user-error "No item on this line"))
 
     ;; open directory
     (if (alist-get 'isDir item)
@@ -1063,9 +1069,13 @@ Pops the previous state from `listen-subsonic--dired-history'."
   "Reload the current browser view.
 
 Re fetches data for the current ID and level from the API."
-  (listen-subsonic--dired-render listen-subsonic--dired-current-id
-                                 listen-subsonic--dired-current-name
-                                 listen-subsonic--dired-current-level))
+  (let ((pt (point)))
+    (listen-subsonic--dired-render listen-subsonic--dired-current-id
+                                   listen-subsonic--dired-current-name
+                                   listen-subsonic--dired-current-level)
+    (goto-char pt)
+    ;; Ensure we are snapped to the button
+    (listen-subsonic--dired-next-line 0)))
 
 (provide 'listen-subsonic)
 ;;; listen-subsonic.el ends here
