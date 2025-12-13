@@ -23,96 +23,96 @@
 ;; * OpenSubsonic API Implementation
 ;; ** 1.0.0
 ;; - [ ] download
-;; - [ ] getCoverArt
-;; - [ ] getIndexes
+;; - [-] getCoverArt
+;; - [-] getIndexes
 ;; - [ ] getLicense
-;; - [ ] getMusicDirectory
-;; - [ ] getMusicFolders
+;; - [-] getMusicDirectory
+;; - [-] getMusicFolders
 ;; - [ ] getNowPlaying
 ;; - [X] getPlaylist
 ;; - [X] getPlaylists
 ;; - [X] ping
-;; - [ ] search
+;; - [-] search (we have search3)
 ;; - [X] stream
 ;; ** 1.1.0
-;; - [ ] changePassword
-;; - [ ] createUser
+;; - [-] changePassword
+;; - [-] createUser
 ;; ** 1.2.0
-;; - [ ] addChatMessage
-;; - [ ] createPlaylist
-;; - [ ] deletePlaylist
+;; - [-] addChatMessage
+;; - [X] createPlaylist
+;; - [X] deletePlaylist
 ;; - [ ] getAlbumList
-;; - [ ] getChatMessages
+;; - [-] getChatMessages
 ;; - [ ] getLyrics
 ;; - [X] getRandomSongs
-;; - [ ] jukeboxControl
+;; - [-] jukeboxControl
 ;; ** 1.3.0
-;; - [ ] deleteUser
-;; - [ ] getUser
+;; - [-] deleteUser
+;; - [-] getUser
 ;; ** 1.4.0
-;; - [ ] search2
+;; - [-] search2 (we have search3)
 ;; ** 1.5.0
 ;; - [X] scrobble
 ;; ** 1.6.0
-;; - [ ] createShare
-;; - [ ] deleteShare
-;; - [ ] getPodcasts
-;; - [ ] getShares
-;; - [X] setRating
-;; - [ ] updateShare
+;; - [-] createShare
+;; - [-] deleteShare
+;; - [-] getPodcasts
+;; - [-] getShares
+;; - [ ] setRating
+;; - [-] updateShare
 ;; ** 1.8.0
 ;; - [X] getAlbum
-;; - [ ] getAlbumList2
+;; - [-] getAlbumList2
 ;; - [X] getArtist
 ;; - [X] getArtists
-;; - [ ] getAvatar
-;; - [ ] getSong
-;; - [ ] getStarred
+;; - [-] getAvatar
+;; - [-] getSong
+;; - [-] getStarred
 ;; - [X] getStarred2
-;; - [ ] getUsers
-;; - [ ] getVideos
-;; - [ ] hls
+;; - [-] getUsers
+;; - [-] getVideos
+;; - [-] hls
 ;; - [X] search3
 ;; - [X] star
 ;; - [X] unstar
 ;; - [ ] updatePlaylist
 ;; ** 1.9.0
 ;; - [ ] createBookmark
-;; - [ ] createPodcastChannel
+;; - [-] createPodcastChannel
 ;; - [ ] deleteBookmark
-;; - [ ] deletePodcastChannel
-;; - [ ] deletePodcastEpisode
-;; - [ ] downloadPodcastEpisode
+;; - [-] deletePodcastChannel
+;; - [-] deletePodcastEpisode
+;; - [-] downloadPodcastEpisode
 ;; - [ ] getBookmarks
 ;; - [ ] getGenres
-;; - [ ] getInternetRadioStations
-;; - [ ] getSongsByGenre
-;; - [ ] refreshPodcasts
+;; - [-] getInternetRadioStations
+;; - [-] getSongsByGenre
+;; - [-] refreshPodcasts
 ;; ** 1.10.1
-;; - [ ] updateUser
+;; - [-] updateUser
 ;; ** 1.11.0
 ;; - [ ] getArtistInfo
 ;; - [ ] getArtistInfo2
 ;; - [ ] getSimilarSongs
 ;; - [ ] getSimilarSongs2
 ;; ** 1.12.0(100.0%)
-;; - [ ] getPlayQueue
-;; - [ ] savePlayQueue
+;; - [-] getPlayQueue
+;; - [-] savePlayQueue
 ;; ** 1.13.0
-;; - [ ] getNewestPodcasts
+;; - [-] getNewestPodcasts
 ;; - [ ] getTopSongs
 ;; ** 1.14.0
-;; - [ ] getAlbumInfo
-;; - [ ] getAlbumInfo2
-;; - [ ] getCaptions
-;; - [ ] getVideoInfo
+;; - [-] getAlbumInfo
+;; - [-] getAlbumInfo2
+;; - [-] getCaptions
+;; - [-] getVideoInfo
 ;; ** 1.15.0
 ;; - [ ] getScanStatus
 ;; - [ ] startScan
 ;; ** 1.16.0
-;; - [ ] createInternetRadioStation
-;; - [ ] deleteInternetRadioStation
-;; - [ ] updateInternetRadioStation
+;; - [-] createInternetRadioStation
+;; - [-] deleteInternetRadioStation
+;; - [-] updateInternetRadioStation
 
 ;;
 
@@ -123,7 +123,6 @@
 ;; TODO: Some kind of indicator to show if track is starred or not
 ;; TODO: Send bookmark request to server periodically
 ;; TODO: When emacs 31.1 is released, cl-decf/cl-incf -> decf/incf
-;; TODO: Create playlist from queue
 
 (require 'plz)          ; HTTP requests
 (require 'auth-source)  ; authinfo
@@ -404,11 +403,9 @@ Returns the newly created playlist."
                                   ids)))
          (body-str (url-build-query-string body-list nil t)))
     ;; Use post and put long list of songId params in post body.
-    (unless (string= (alist-get 'status
-                           (listen-subsonic--api-call "createPlaylist"
-                                                      nil nil
-                                                      body-str))
-                     "ok")
+    (unless (listen-subsonic--api-call "createPlaylist"
+                                       nil nil
+                                       body-str)
       (user-error "Playlist was not created."))))
 
 (defun listen-subsonic-create-playlist (queue name)
@@ -429,6 +426,16 @@ Only tracks with the source \"subsonic\" will be included."
           (listen-subsonic--create-playlist ids name)
           (message "Created playlist '%s' with %d tracks." name (length ids)))
       (user-error "No Subsonic tracks found"))))
+
+(defun listen-subsonic-delete-playlist (id)
+  "Delete a Subsonic playlist with ID.
+
+When called interactively, show a prompt for their playlists using
+`listen-subsonic--read-playlist'."
+  (interactive (list (listen-subsonic--read-playlist)))
+  (when (listen-subsonic--api-call "deletePlaylist"
+                                   `(("id" . ,id)))
+    (message "Playlist deleted.")))
 
 (defun listen-subsonic--star-item (id star-p &optional callback)
   "Set ID's (artist, album or track) star status according to STAR-P.
@@ -709,6 +716,7 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
      (mapcar (lambda (item) (cons '(subsonic-type . "Album") item)) albums)
      (mapcar (lambda (item) (cons '(subsonic-type . "Track") item)) tracks))))
 
+;; TODO: Prompt user for song first, then choose queue
 (defun listen-subsonic-search (query)
   "Search the server for QUERY, and display artists, albums and tracks.
 
