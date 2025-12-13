@@ -13,7 +13,7 @@ The only external dependency is either [[https://mpv.io/][MPV]] or [[https://www
 
 Queues are provided as the means to play consecutive tracks, and they are shown in a ~vtable~-based view buffer.  They are persisted between sessions using the ~persist~ library, and they may be bookmarked.
 
-The primary interface to one's music library is through the filesystem, by selecting a file to play, or by adding files and directories to a queue.  Although MPD is not required, support is provided for finding files from a local MPD server's library using MPD's metadata searching.
+The primary interface to one's music library is through the filesystem, by selecting a file to play, or by adding files and directories to a queue.  Although MPD is not required, support is provided for finding files from a local MPD server's library using MPD's metadata searching. The package also support playing from OpenSubsonic-compatible servers such as Navidrome or Gonic.
 
 A simple "library" view is provided that shows a list of files organized into a hierarchy by genre, date, artist, album, etc.  (This will be made more configurable and useful in the future.)
 
@@ -59,8 +59,10 @@ To install from Git, it is recommended to use [[https://github.com/quelpa/quelpa
 
 One might also use systems like [[https://github.com/progfolio/elpaca][Elpaca]] or [[https://github.com/radian-software/straight.el][Straight]] (which is also used by [[https://github.com/doomemacs/doomemacs][DOOM]]), but the author cannot offer support for them.
 * Configuration
-
 Listen is intended to work with little-to-no configuration.  You can set the ~listen-directory~ to the location of your music library if it's not at ~~/Music~.  See ~M-x customize-group RET listen RET~.
+
+For use with OpenSubsonic-compatible music servers, you must set ~listen-subsonic-url~.
+
 * Usage
 Use the command ~listen~ to show the Transient menu.  From there, it is--hopefully--self-explanatory.  Please feel free to give feedback if it doesn't seem so.  For more information, see the following sections.
 
@@ -87,6 +89,7 @@ Tracks can be added to a queue from various sources using these commands:
 - Files and directories: ~listen-queue-add-files~.  Individual files may be chosen, or a directory may be, which will be searched recursively for tracks, which are added to the selected queue.
 - From an MPD server: ~listen-queue-add-from-mpd~.  An MPD search query will be read with completion, and matching tracks are added to the selected queue.
 - From a playlist file: ~listen-queue-add-from-playlist-file~.  The playlist file is read, and its tracks are added to the selected queue.
+- From a Subsonic server: ~listen-queue-add-from-subsonic~.  Prompts for search, starred or playlist to add to the selected queue.
 *** Queue buffer
 
 A queue may be shown in a buffer with the command ~listen-queue~, which shows its tracks in a [[info:vtable#Introduction][vtable]] with columns for metadata and filename.
@@ -111,7 +114,7 @@ In the buffer, you can use these commands:
 | Shuffle the queue                  | ~listen-queue-shuffle~ (~s~)  |
 
 | Revert the queue buffer         | ~listen-queue-revert~ (~g~) |
-| Revert queue's tracks from disk | ~C-u g~                     |
+| Revert queue's tracks from disk | ~C-u g~                   |
 | Pause the player                | ~listen-pause~ (~SPC~)      |
 | Show the menu                   | ~listen-menu~ (~?~)         |
 **** Bookmarks
@@ -148,6 +151,7 @@ Tracks from various sources can be shown in a library using these commands:
 - Files and directories: ~listen-library~.  Individual files may be chosen, or a directory may be, which will be searched recursively for tracks.
 - From an MPD server: ~listen-library-from-mpd~.  An MPD search query will be read with completion, and matching tracks are read from the MPD server.
 - From a playlist file: ~listen-library-from-playlist-file~.  Tracks are read from the given playlist file.
+- From a Subsonic server: ~listen-library-from-subsonic~.  Prompts for search, starred or playlist.
 **** Commands
 
 In the library buffer, you can use these commands:
@@ -201,6 +205,7 @@ The ~listen-mode~ minor mode runs a timer which plays the next track in the curr
 ** v0.10-pre
 
 *Additions*
+- OpenSubsonic server supoort.
 - [[https://mpv.io/][MPV]] support (works asynchronously, to improve performance and avoid blocking Emacs).
 - Command ~listen-status~, which shows a status buffer (contributions to it are welcome).
 - Command ~listen-queue-add-tracks~, when used in a Dired buffer, uses the marked files or the one at point.
