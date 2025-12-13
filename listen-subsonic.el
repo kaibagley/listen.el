@@ -576,25 +576,36 @@ Returns the selected playlist's ID as a string."
          (name (completing-read "Playlist: " playlists nil t)))
     (alist-get name playlists nil nil #'equal)))
 
-(defun listen-subsonic--affixation (hashtable suffix-fn &optional suffix-face prefix-fn prefix-face)
+(defun listen-subsonic--affixation (hashtable &optional suffix-fn suffix-face prefix-fn prefix-face)
   "Create an affixation function for `completing-read' candidates in HASHTABLE.
 Returns an affixation function which maps a list of candidates to a list of suffixes.
 
-SUFFIX-FN returns the suffix string from the object found in HASHTABLE.
+Handles non-list elements such as \"..\" and \"[All]\".
+
+SUFFIX-FN returns the suffix string from the object found in HASHTABLE. When nil, no suffix is
+applied.
 SUFFIX-FACE is applied to the suffix.
-PREFIX-FN returns a 1 character width prefix string from the object found in HASHTABLE.
+PREFIX-FN returns a prefix string from the object found in HASHTABLE. When nil,no prefix is applied.
 PREFIX-FACE is applied to the prefix."
   (lambda (cands)
     (mapcar (lambda (cand)
-              (let* ((item (gethash cand hashtable))
-                     (len (string-width cand))
-                     (padding (make-string (max 5 (- 40 len)) ?\s))
-                     (suffix (or (funcall suffix-fn item) ""))
-                     (prefix (or (funcall prefix-fn item) "")))
-                (list cand
-                      (propertize prefix 'face prefix-face)
-                      (concat padding (propertize suffix 'face suffix-face)))))
-            cands)))
+              (let ((item (gethash cand hashtable)))
+                (if (symbolp item)
+                    (list cand "" "") ; For ".." and "[All]"
+                  (let* ((len (string-width cand))
+                         (padding (make-string (max 5 (- 40 len)) ?\s))
+                         (suf (if suffix-fn (funcall suffix-fn item) ""))
+                         (suffix (if suffix-face
+                                     (propertize suf 'face suffix-face)
+                                   suf))
+                         (pre (if prefix-fn (funcall prefix-fn item) ""))
+                         (prefix (if prefix-face
+                                     (propertize pre 'face prefix-face)
+                                   pre)))
+                    (list cand
+                          prefix
+                          (concat padding suffix))))))
+                cands)))
 
 (defun listen-subsonic--search-suffix (item)
   "Return a suffix string for ITEM type.
@@ -615,63 +626,36 @@ ITEM must include element with `car' \"subsonic-type\" for determining which suf
 
 ITEM must include element with `car' \"starred\"."
   (format "%s "
-         (if (alist-get 'starred item)
-             (propertize " " 'display
-                         (svg-lib-icon "star" 'listen-starred
-                                       :stroke 0 :margin -2 :background nil))
-           " ")))
+          (if (alist-get 'starred item)
+              (propertize " " 'display
+                          (svg-lib-icon "star" 'listen-starred
+                                        :stroke 0 :margin -2 :background nil))
+            " ")))
 
-(defun listen-subsonic--suffix-track (track)
-  "Return TRACK's album name to be used as an `affixation-function' suffix."
-  (listen-track-album track))
-
-(defun listen-subsonic--suffix-playlist (playlist)
+(defun listen-subsonic--playlist-suffix (playlist)
   "Returns PLAYLIST's song count to be used as an `affixation-function' suffix."
   (concat (number-to-string (or (alist-get 'songCount playlist) 0)) " tracks"))
 
-(defun listen-subsonic--suffix-node (node)
+(defun listen-subsonic--node-suffix (node)
   "Returns affixation suffix for NODE.
 
-Displays year for directories and albums, and duration for songs."
+Displays album count for artists, artist/year for albums, and duration for songs."
   (cond
    ;; ".." and "[All]"
    ((symbolp node) "")
-   ;; album or folder
-   ((alist-get 'isDir node)
-    (if-let* ((year (alist-get 'year node)))
-        (number-to-string year)
-      ""))
-   ;; song
-   (t (listen-format-seconds (or (alist-get 'duration node) 0)))))
-
-(defun listen-subsonic--read-track (tracks prompt)
-  "Prompt user to select a track from TRACKS, displaying PROMPT.
-Returns the selected track as a `listen-track'.
-
-Handles duplicate names by appending a counter."
-  (let ((track-map (make-hash-table :test 'equal)))
-    (dolist (track tracks)
-      ;; use "artist - track" as id
-      (let* ((artist-track (format "%s - %s"
-                                   (propertize (listen-track-artist track) 'face 'listen-artist)
-                                   (propertize (listen-track-title track) 'face 'listen-title)))
-             (name artist-track)
-             (count 1))
-        ;; add number to duplicates
-        (while (gethash name track-map)
-          (cl-incf count)
-          (setq name (format "%s %s"
-                             artist-track
-                             (propertize (format "(%d)" count) 'face 'shadow))))
-        (puthash name track track-map)))
-    (let* ((completion-extra-properties
-            `(:affixation-function
-              ,(listen-subsonic--affixation track-map
-                                            #'listen-subsonic--suffix-track
-                                            'listen-album
-                                            #'listen-subsonic--prefix-track)))
-           (selected-name (completing-read prompt track-map nil t)))
-      (gethash selected-name track-map))))
+   ;; Artist has albumCount
+   ((alist-get 'albumCount node)
+    (format "%s albums" (alist-get 'albumCount node)))
+   ;; Album has songCount
+   ((alist-get 'songCount node)
+    (concat (alist-get 'artist node)
+            (when-let* ((year (alist-get 'year node)))
+              (format " (%s)" year))))
+   ;; Song has suffix (which is flac, mp3 etc)
+   ((alist-get 'suffix node)
+    (listen-format-seconds (or (alist-get 'duration node) 0)))
+   ;; Fallback to empty string
+   (t "")))
 
 (defun listen-subsonic-queue-random (n queue)
   "Fetch N random songs from the server and add them to QUEUE."
@@ -696,6 +680,13 @@ Handles duplicate names by appending a counter."
   (interactive (list (listen-queue-complete :allow-new-p t)))
   (let ((tracks (listen-subsonic-get-starred-tracks)))
     (listen-queue-add-tracks tracks queue)))
+
+;; TODO: Implement this. I am imagining a completing-read menu for different options similar to the
+;;       library one.
+(defun listen-queue-add-from-subsonic (queue)
+  "Present a list of options for adding Subsonic tracks to the QUEUE."
+  (interactive)
+  (listen-subsonic-search))
 
 ;; TODO: C-u adds to start of queue/next? Waiting for listen-queue function to enable
 (defun listen-subsonic--search (query)
@@ -746,16 +737,15 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
                                     (propertize (format "(%d)" count) 'face 'shadow))))
         (puthash unique-name item items-map)))
 
-    (let* ((suffix-fn #'listen-subsonic--search-suffix)
-           (prefix-fn #'listen-subsonic--search-prefix)
-           (group-fn (lambda (cand transform)
+    (let* ((group-fn (lambda (cand transform)
                        (if transform
                            cand
                          (alist-get 'subsonic-type (gethash cand items-map)))))
            (completion-extra-properties
-            `(:affixation-function ,(listen-subsonic--affixation items-map
-                                                                 suffix-fn 'listen-album
-                                                                 prefix-fn)
+            `(:affixation-function ,(listen-subsonic--affixation
+                                     items-map
+                                     #'listen-subsonic--search-suffix 'completions-annotations
+                                     #'listen-subsonic--search-prefix)
               :group-function ,group-fn))
            (selected-name (completing-read "Select: " items-map nil t))
            (selected-item (gethash selected-name items-map))
@@ -820,8 +810,7 @@ SOURCE may be one of:
 ;; Completing read browser
 ;; TODO: unify the logic used by the minibuffer browser and the buffer browser
 ;; TODO: have this add to queue
-;; FIXME: Fix [All] not appearing in list
-;; FIXME: Affixation function broken. (probably related to mysterious All missing)
+;; FIXME: Affixation function broken.
 (defun listen-subsonic-find ()
   "Browse the Subsonic library hierarchy using `completing-read'.
 
@@ -850,8 +839,11 @@ HISTORY is a stack containint the user's navigation history."
                      (format "%s / %s: " (string-join (reverse path) " / ") name)))))
 
     ;; When theres history, add an up option
-    (when history
-      (puthash (propertize ".." 'face 'shadow) :up node-map))
+    ;; (when history
+    ;;   (puthash (propertize ".." 'face 'shadow) :up node-map))
+
+    ;; ;; Show "[All]" to select all
+    ;; (puthash (propertize "[All]" 'face 'shadow) :this node-map)
 
     ;; Prepare candidates
     (dolist (item items)
@@ -864,14 +856,12 @@ HISTORY is a stack containint the user's navigation history."
         (puthash disp-name item node-map)))
 
     ;; ensure ".." and "[All]" are at the top
-    ;; subsonic return is already sorted
     (let* ((completion-extra-properties
             `(:affixation-function ,(listen-subsonic--affixation
                                      node-map
-                                     #'listen-subsonic--suffix-node
-                                     'completions-annotations)
-              :display-sort-function identity
-              :cycle-sort-functions identity))
+                                     #'listen-subsonic--node-suffix 'error)))
+                                   ;; :display-sort-function identity
+                                   ;; :cycle-sort-function identity))
            (sel-name (completing-read prompt node-map nil t))
            (selection (gethash sel-name node-map)))
 
