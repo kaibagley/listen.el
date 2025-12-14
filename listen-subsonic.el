@@ -1,4 +1,4 @@
-;;; listen-subsonic.el --- Subsonic server support for listen.el         -*- lexical-binding: t; -*-
+;;; Listen-Subsonic.El --- Subsonic server support for listen.el         -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2025  Free Software Foundation, Inc.
 
@@ -129,6 +129,7 @@
 (require 'listen-queue) ; Add tracks to queue
 (require 'svg-lib)      ; For starred icon
 
+(require 'cl-lib)       ; for cl-incf/decf
 (require 'map)          ; for map-let and map-elt
 (require 'url-util)     ; for url-build-query-string
 
@@ -196,6 +197,9 @@ This should not be set globally.
 For batch operations, this is let-bound.
 For other operations, generate on the fly using `listen-subsonic--get-auth-params'.")
 
+(defvar listen-subsonic--menu-max-width 50
+  "Maximum width of strings returned by search function.")
+
 ;;;; General helpers
 
 ;;;; Auth helpers
@@ -207,6 +211,7 @@ Returns an auth-source plist, or nil if not found.
 Searches `auth-source' files for an entry with \":host\" matching `listen-subsonic-url'."
   (car (auth-source-search :host listen-subsonic-url)))
 
+;; NOTE: Token and salt are leaked when mpv is called with a URL
 (defun listen-subsonic--get-auth-params ()
   "Return authentication info for Subsonic API calls.
 Return an alist of strings: ((\"u\" . \"myusername\") (\"t\" . \"<randomstring>\") ...)."
@@ -285,7 +290,7 @@ The JSON should usually be processed by `listen-subsonic--process-api-response'.
       :body body
       :as #'listen-subsonic--process-api-response
       :then (or callback 'sync)
-      :else (lambda (err) (message "Subsonic API request error: %s" err)))))
+      :else (lambda (err) (user-error "Subsonic API request error: %s" err)))))
 
 ;;;; Data formatting
 
@@ -477,6 +482,9 @@ Should be added to `listen-track-end-functions'."
 (defun listen-subsonic--get-nodes (level id)
   "Fetch \"nodes\" for directory hierarchy LEVEL and ID.
 Returns a list of alists, each alist representing children of ID.
+Normalises artists, albums and tracks such that:
+- All three have the alist elements \"name\" and \"subsonic-type\".
+- Artists and albums have alist element \"isDir\".
 
 LEVEL determines the endpoint to use, and may be one of:
 - :artists: Returns top-level view of all artists using endpoint \"getArtists\".
@@ -490,18 +498,28 @@ LEVEL determines the endpoint to use, and may be one of:
               ;; res is organised alphabetically, so we have to flatten
               (mapcan (lambda (idx)
                         (let ((artists (alist-get 'artist idx)))
-                          (mapcar (lambda (artist) (cons '(isDir . t) artist)) artists)))
+                          (mapcar (lambda (artist)
+                                    (append '((subsonic-type . :artist)
+                                              (isDir . t))
+                                            artist))
+                                  artists)))
                       indexes)))
            (:artist
             (let* ((data (listen-subsonic--api-call "getArtist" `(("id" . ,id))))
                    (albums (map-nested-elt data '(artist album))))
-              (mapcar (lambda (album) (cons '(isDir . t) album)) albums)))
+              (mapcar (lambda (album)
+                        (append '((subsonic-type . :album)
+                                  (isDir . t))
+                                album))
+                      albums)))
            (:album
             (let* ((data (listen-subsonic--api-call "getAlbum" `(("id" . ,id))))
                    (tracks (map-nested-elt data '(album song))))
               ;; getAlbum tracks dont have "name", the other 2 endpoints do
               (mapcar (lambda (track)
-                        (cons (cons 'name (alist-get 'title track)) track))
+                        (append `((subsonic-type . :track)
+                                  (name . ,(alist-get 'title track)))
+                                track))
                       tracks))))))
     items))
 
@@ -610,7 +628,7 @@ PREFIX-FACE is applied to the prefix."
          (if (memq item '(:up :this))
              (list cand "" "")
            (let* ((len (string-width cand))
-                  (padding (make-string (max 5 (- 40 len)) ?\s))
+                  (padding (make-string (- listen-subsonic--menu-max-width len) ?\s))
                   (suf (if suffix-fn (funcall suffix-fn item) ""))
                   (suffix (if suffix-face (propertize suf 'face suffix-face) suf))
                   (pre (if prefix-fn (funcall prefix-fn item) ""))
@@ -618,21 +636,37 @@ PREFIX-FACE is applied to the prefix."
              (list cand prefix (concat padding suffix))))))
      cands)))
 
-(defun listen-subsonic--search-suffix (item)
+(defun listen-subsonic--format-column (str width &optional face)
+  "Format STR to fit WIDTH.
+If shorter, pad with spaces. If longer, truncate with ellipsis.
+Apply FACE if non-nil."
+  (let ((s (truncate-string-to-width (or str "") width 0 ?\s t)))
+    (if face (propertize s 'face face) s)))
+
+(defun listen-subsonic--item-suffix (item)
   "Return a suffix string for ITEM type.
 
 ITEM must include element with `car' \"subsonic-type\" for determining which suffix to use."
   (pcase (alist-get 'subsonic-type item)
-    ("Artist" (format "%s albums" (alist-get 'albumCount item)))
-    ("Album" (concat (alist-get 'artist item)
-                     (when-let* ((year (alist-get 'year item)))
-                       (format " (%s)" year))))
-    ("Track" (concat (alist-get 'artist item)
-                     " / "
-                     (alist-get 'album item)
-                     (format " (%s)" (listen-format-seconds (or (alist-get 'duration item) 0)))))))
+    (:artist
+     (format "%s albums" (or (alist-get 'albumCount item) 0)))
+    (:album
+     (concat (listen-subsonic--format-column (alist-get 'artist item)
+                                             20 'listen-artist)
+             " "
+             (when-let* ((year (alist-get 'year item)))
+               (format "(%s)" year))))
+    (:track
+     (concat (listen-subsonic--format-column (alist-get 'artist item)
+                                             20 'listen-artist)
+             " "
+             (listen-subsonic--format-column (alist-get 'album item)
+                                             20 'listen-album)
+             " "
+             (listen-format-seconds (or (alist-get 'duration item) 0))))
+    (_ "")))
 
-(defun listen-subsonic--search-prefix (item)
+(defun listen-subsonic--item-prefix (item)
   "Return a prefix string for ITEM type.
 
 ITEM must include element with `car' \"starred\"."
@@ -750,11 +784,11 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
          (albums (alist-get 'album result))
          (tracks (alist-get 'song result)))
     (nconc
-     (mapcar (lambda (item) (cons '(subsonic-type . "Artist") item)) artists)
-     (mapcar (lambda (item) (cons '(subsonic-type . "Album") item)) albums)
-     (mapcar (lambda (item) (cons '(subsonic-type . "Track") item)) tracks))))
+     (mapcar (lambda (item) (cons '(subsonic-type . :artist) item)) artists)
+     (mapcar (lambda (item) (cons '(subsonic-type . :album) item)) albums)
+     (mapcar (lambda (item) (cons '(subsonic-type . :track) item)) tracks))))
 
-;; TODO: Prompt user for song first, then choose queue
+;; TODO: Truncate search results before it hits affixation
 (defun listen-subsonic-search (query)
   "Search the server for QUERY, and display artists, albums and tracks.
 
@@ -763,7 +797,7 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
   (interactive (list (read-string "Search: ")))
   (let* ((items (listen-subsonic--search query))
          (entries nil)
-         (queue (listen-queue-complete :allow-new-p t)))
+         (queue ))
 
     (unless items
       (user-error "No search results for '%s'" query))
@@ -771,9 +805,19 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
     ;; Build entries with unique display names.
     (dolist (item items)
       (let* ((type (alist-get 'subsonic-type item))
-             (name (if (string= type "Track")
-                       (alist-get 'title item)
-                     (alist-get 'name item)))
+             (face (pcase type
+                     (:artist 'listen-artist)
+                     (:album 'listen-album)
+                     (:track 'listen-title)))
+             (name (propertize
+                    (truncate-string-to-width
+                     ;; Ensure that tracks have a name elem
+                     (pcase type
+                       (:artist (alist-get 'name item))
+                       (:album (alist-get 'name item))
+                       (:track (alist-get 'title item)))
+                     (- listen-subsonic--menu-max-width 5) 0 nil t)
+                    'face face))
              (disp-name name)
              (count 1))
         (while (assoc disp-name entries #'equal)
@@ -787,12 +831,17 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
 
     (let* ((affix-fn (listen-subsonic--affixation
                       entries
-                      #'listen-subsonic--search-suffix 'completions-annotations
-                      #'listen-subsonic--search-prefix))
+                      #'listen-subsonic--item-suffix nil
+                      #'listen-subsonic--item-prefix nil))
+           ;; convert keyword to string for group function
            (group-fn (lambda (cand transform)
                        (if transform
                            cand
-                         (alist-get 'subsonic-type (alist-get cand entries nil nil #'equal)))))
+                         (let ((type (alist-get 'subsonic-type (alist-get cand entries nil nil #'equal))))
+                           (pcase type
+                             (:artist "Artists")
+                             (:album "Albums")
+                             (:track "Songs"))))))
            (selected
             (listen-subsonic--completing-read
              "Select: " entries
@@ -801,11 +850,11 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
 
       (let ((type (alist-get 'subsonic-type selected)))
         (pcase type
-            ("Track"
-             ;; add a track to the queue
-             (let ((track (listen-subsonic--json-to-listen selected)))
-               (listen-queue-add-tracks (list track) queue)
-               (message "Added '%s' to the queue." (listen-track-title track))))
+          (:track
+           ;; add a track to the queue
+           (let ((track (listen-subsonic--json-to-listen selected)))
+             (listen-queue-add-tracks (list track) (listen-queue-complete :allow-new-p t))
+             (message "Added '%s' to the queue." (listen-track-title track))))
           (_ ; artist or album
            (let ((id (alist-get 'id selected))
                  (name (alist-get 'name selected))
@@ -813,7 +862,7 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
              ;; hand over to --find-step
              (when-let* ((result (listen-subsonic--find-step next id name)))
                (let ((tracks (funcall (nth 0 result))))
-                 (listen-queue-add-tracks tracks queue)
+                 (listen-queue-add-tracks tracks (listen-queue-complete :allow-new-p t))
                  (message "Added %d tracks from '%s'." (length tracks) name))))))))))
 
 ;; TODO: Make this send a clear cache request to server too?
@@ -861,18 +910,26 @@ HISTORY is a stack containint the user's navigation history."
 
     ;; Prepare candidates
     (dolist (item items)
-      (let* ((node-name (alist-get 'name item))
-             (disp-name node-name)
+      (let* ((type (alist-get 'subsonic-type item))
+             (face (pcase type
+                     (:artist 'listen-artist)
+                     (:album 'listen-album)
+                     (:track 'listen-title)))
+             (name (propertize (alist-get 'name item)
+                               'face face))
+             (disp-name (truncate-string-to-width name
+                                                  (- listen-subsonic--menu-max-width 5) 0 nil t))
              (count 1))
         (while (assoc disp-name entries #'equal)
           (cl-incf count)
-          (setq disp-name (format "%s (%d)" node-name count)))
+          (setq disp-name (format "%s (%d)" name count)))
         (push (cons disp-name item) entries)))
     (setq entries (nreverse entries))
 
     (let* ((affix-fn (listen-subsonic--affixation
                       entries
-                      #'listen-subsonic--node-suffix 'error))
+                      #'listen-subsonic--node-suffix nil
+                      #'listen-subsonic--item-prefix nil))
            (selection (listen-subsonic--completing-read
                        prompt entries
                        `((affixation-function . ,affix-fn)
@@ -1094,7 +1151,7 @@ Inserts a header, navigation buttons and the list of items."
                      (listen-subsonic--dired-insert-item item next)))
           (when (and art-id (not (eq level :artists)))
             (listen-subsonic--dired-fetch-art art-id buf pos)))))
-    (beginning-of-buffer)
+    (goto-char (point-min))
     (listen-subsonic--dired-next-line)))
 
 ;; browser functions
