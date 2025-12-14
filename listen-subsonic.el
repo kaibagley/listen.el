@@ -576,36 +576,50 @@ Returns the selected playlist's ID as a string."
          (name (completing-read "Playlist: " playlists nil t)))
     (alist-get name playlists nil nil #'equal)))
 
-(defun listen-subsonic--affixation (hashtable &optional suffix-fn suffix-face prefix-fn prefix-face)
-  "Create an affixation function for `completing-read' candidates in HASHTABLE.
-Returns an affixation function which maps a list of candidates to a list of suffixes.
+(defun listen-subsonic--completing-read (prompt entries &optional extra-metadata)
+  "Read a candidate with PROMPT from ENTRIES.
+Returns the chosen item.
 
-Handles non-list elements such as \"..\" and \"[All]\".
+ENTRIES is an alist of display strings, and its corresponding value ((disp-str . item) ...).
+EXTRA-METADATA is an alist of completion metadata pairs for `completing-read', to be `cons'ed with
+(category . listen-subsonic). For example:
+'((affixation-function . <fn>)
+  (group-function . <fn>)
+  (display-sort-function . identity)
+  (cycle-sort-function . identity))."
+  (let* ((candidates (mapcar #'car entries))
+         (default-metadata '((category . listen-subsonic)))
+         (metadata (cons 'metadata (append default-metadata extra-metadata)))
+         (table (completion-table-with-metadata candidates metadata))
+         (selection (completing-read prompt table nil t)))
+    (alist-get selection entries nil nil #'equal)))
 
+(defun listen-subsonic--affixation (entries &optional suffix-fn suffix-face prefix-fn prefix-face)
+  "Create an affixation function for `completing-read' using ENTRIES.
+
+ENTRIES is an alist of display strings and their corresponding item: ((disp-str . item) ...).
+Where an item in the ENTRIES alist may be:
+- the symbol :up or :this for special candidates such as \"..\" and \"[All]\",
+- a Subsonic JSON alist for normal nodes.
 SUFFIX-FN returns the suffix string from the object found in HASHTABLE. When nil, no suffix is
 applied.
 SUFFIX-FACE is applied to the suffix.
 PREFIX-FN returns a prefix string from the object found in HASHTABLE. When nil,no prefix is applied.
 PREFIX-FACE is applied to the prefix."
   (lambda (cands)
-    (mapcar (lambda (cand)
-              (let ((item (gethash cand hashtable)))
-                (if (symbolp item)
-                    (list cand "" "") ; For ".." and "[All]"
-                  (let* ((len (string-width cand))
-                         (padding (make-string (max 5 (- 40 len)) ?\s))
-                         (suf (if suffix-fn (funcall suffix-fn item) ""))
-                         (suffix (if suffix-face
-                                     (propertize suf 'face suffix-face)
-                                   suf))
-                         (pre (if prefix-fn (funcall prefix-fn item) ""))
-                         (prefix (if prefix-face
-                                     (propertize pre 'face prefix-face)
-                                   pre)))
-                    (list cand
-                          prefix
-                          (concat padding suffix))))))
-                cands)))
+    (mapcar
+     (lambda (cand)
+       (let ((item (alist-get cand entries nil nil #'equal)))
+         (if (memq item '(:up :this))
+             (list cand "" "")
+           (let* ((len (string-width cand))
+                  (padding (make-string (max 5 (- 40 len)) ?\s))
+                  (suf (if suffix-fn (funcall suffix-fn item) ""))
+                  (suffix (if suffix-face (propertize suf 'face suffix-face) suf))
+                  (pre (if prefix-fn (funcall prefix-fn item) ""))
+                  (prefix (if prefix-face (propertize pre 'face prefix-face) pre)))
+             (list cand prefix (concat padding suffix))))))
+     cands)))
 
 (defun listen-subsonic--search-suffix (item)
   "Return a suffix string for ITEM type.
@@ -715,57 +729,59 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
 - Selecting an artist or album opens the `listen-subsonic-find' browsing functionality."
   (interactive (list (read-string "Search: ")))
   (let* ((items (listen-subsonic--search query))
-         (items-map (make-hash-table :test 'equal))
+         (entries nil)
          (queue (listen-queue-complete :allow-new-p t)))
 
     (unless items
       (user-error "No search results for '%s'" query))
 
-    ;; hashmap for completions
+    ;; Build entries with unique display names.
     (dolist (item items)
       (let* ((type (alist-get 'subsonic-type item))
              (name (if (string= type "Track")
                        (alist-get 'title item)
                      (alist-get 'name item)))
-             (unique-name name)
+             (disp-name name)
              (count 1))
-        ;; duplicates
-        (while (gethash unique-name items-map)
+        (while (assoc disp-name entries #'equal)
           (cl-incf count)
-          (setq unique-name (format "%s %s"
-                                    name
-                                    (propertize (format "(%d)" count) 'face 'shadow))))
-        (puthash unique-name item items-map)))
+          (setq disp-name (format "%s %s"
+                                  name
+                                  (propertize (format "(%d)" count)
+                                              'face 'shadow))))
+        (push (cons disp-name item) entries)))
+    (setq entries (nreverse entries))
 
-    (let* ((group-fn (lambda (cand transform)
+    (let* ((affix-fn (listen-subsonic--affixation-alist
+                      entries
+                      #'listen-subsonic--search-suffix 'completions-annotations
+                      #'listen-subsonic--search-prefix))
+           (group-fn (lambda (cand transform)
                        (if transform
                            cand
-                         (alist-get 'subsonic-type (gethash cand items-map)))))
-           (completion-extra-properties
-            `(:affixation-function ,(listen-subsonic--affixation
-                                     items-map
-                                     #'listen-subsonic--search-suffix 'completions-annotations
-                                     #'listen-subsonic--search-prefix)
-              :group-function ,group-fn))
-           (selected-name (completing-read "Select: " items-map nil t))
-           (selected-item (gethash selected-name items-map))
-           (type (alist-get 'subsonic-type selected-item)))
+                         (alist-get 'subsonic-type (alist-get cand entries nil nil #'equal)))))
+           (selected
+            (listen-subsonic--completing-read
+             "Select: " entries
+             `((affixation-function . ,affix-fn)
+               (group-function . ,group-fn)))))
 
-      (pcase type
-        ("Track"
-         ;; add a track to the queue
-         (let ((track (listen-subsonic--json-to-listen selected-item)))
-           (listen-queue-add-tracks (list track) queue)
-           (message "Added '%s' to the queue." (listen-track-title track))))
-        (_ ; artist or album
-         (let ((id (alist-get 'id selected-item))
-               (name (alist-get 'name selected-item))
-               (next (if (string= type "Artist") :artist :album)))
-           ;; hand over to --find-step
-           (when-let* ((result (listen-subsonic--find-step next id name)))
-             (let ((tracks (funcall (nth 0 result))))
-               (listen-queue-add-tracks tracks queue)
-               (message "Added %d tracks from '%s'." (length tracks) name)))))))))
+      (let ((type (alist-get 'subsonic-type selected)))
+        (pcase type
+            ("Track"
+             ;; add a track to the queue
+             (let ((track (listen-subsonic--json-to-listen selected)))
+               (listen-queue-add-tracks (list track) queue)
+               (message "Added '%s' to the queue." (listen-track-title track))))
+          (_ ; artist or album
+           (let ((id (alist-get 'id selected))
+                 (name (alist-get 'name selected))
+                 (next (if (string= type "Artist") :artist :album)))
+             ;; hand over to --find-step
+             (when-let* ((result (listen-subsonic--find-step next id name)))
+               (let ((tracks (funcall (nth 0 result))))
+                 (listen-queue-add-tracks tracks queue)
+                 (message "Added %d tracks from '%s'." (length tracks) name))))))))))
 
 ;; TODO: add dired browser to this?
 (defun listen-library-from-subsonic (&optional source)
@@ -831,39 +847,37 @@ Returns a list (function name) for the selected action, or nil to go up/back.
 LEVEL, ID, and NAME define the current location.
 HISTORY is a stack containint the user's navigation history."
   (let* ((items (listen-subsonic--get-nodes level id))
-         (node-map (make-hash-table :test 'equal))
          (next (listen-subsonic--browser-next-level level))
          (prompt (if (eq level :artists)
                      "Library: "
                    (let ((path (mapcar (lambda (h) (nth 2 h)) history)))
-                     (format "%s / %s: " (string-join (reverse path) " / ") name)))))
+                     (format "%s / %s: " (string-join (reverse path) " / ") name))))
+         (entries nil))
 
-    ;; When theres history, add an up option
-    ;; (when history
-    ;;   (puthash (propertize ".." 'face 'shadow) :up node-map))
-
-    ;; ;; Show "[All]" to select all
-    ;; (puthash (propertize "[All]" 'face 'shadow) :this node-map)
+    ;; ".." and "[All]"
+    (when history
+      (push (cons (propertize ".." 'face 'shadow) :up) entries))
+    (push (cons (propertize "[All]" 'face 'shadow) :this) entries)
 
     ;; Prepare candidates
     (dolist (item items)
       (let* ((node-name (alist-get 'name item))
              (disp-name node-name)
              (count 1))
-        (while (gethash disp-name node-map)
+        (while (assoc disp-name entries #'equal)
           (cl-incf count)
           (setq disp-name (format "%s (%d)" node-name count)))
-        (puthash disp-name item node-map)))
+        (push (cons disp-name item) entries)))
+    (setq entries (nreverse entries))
 
-    ;; ensure ".." and "[All]" are at the top
-    (let* ((completion-extra-properties
-            `(:affixation-function ,(listen-subsonic--affixation
-                                     node-map
-                                     #'listen-subsonic--node-suffix 'error)))
-                                   ;; :display-sort-function identity
-                                   ;; :cycle-sort-function identity))
-           (sel-name (completing-read prompt node-map nil t))
-           (selection (gethash sel-name node-map)))
+    (let* ((affix-fn (listen-subsonic--affixation
+                      entries
+                      #'listen-subsonic--node-suffix 'error))
+           (selection (listen-subsonic--completing-read
+                       prompt entries
+                       `((affixation-function . ,affix-fn)
+                         (display-sort-function . identity)
+                         (cycle-sort-function . identity)))))
 
       ;; Handle user selection
       (cond
@@ -872,19 +886,18 @@ HISTORY is a stack containint the user's navigation history."
         (apply #'listen-subsonic--find-step (car history))) ; Latest history
        ;; "[All]"
        ((eq selection :this)
-        (list (lambda ()
-                (listen-subsonic--get-all-tracks id level))
+        (list (lambda () (listen-subsonic--get-all-tracks id level))
               (format "Subsonic: %s" name)))
        ;; Folder/artist/album
-       ((and (alist-get 'isDir selection))
+       ((and (listp selection) (alist-get 'isDir selection))
         (listen-subsonic--find-step next
                                     (alist-get 'id selection)
-                                    sel-name
+                                    (alist-get 'name selection)
                                     (cons (list level id name history) history))) ; Add history
        ;; Song
        (t
         (list (lambda () (list (listen-subsonic--json-to-listen selection)))
-              (format "Subsonic: %s" sel-name)))))))
+              (format "Subsonic: %s" (alist-get 'name selection))))))))
 
 ;; dired-like browser UI
 (defun listen-subsonic--dired-next-line (&optional n)
