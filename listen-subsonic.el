@@ -668,16 +668,20 @@ Displays album count for artists, artist/year for albums, and duration for songs
    ;; Fallback to empty string
    (t "")))
 
+(defun listen-subsonic-get-random-tracks (n)
+  "Fetch N random songs from the server.
+Returns a list of N `listen-track's."
+  (listen-subsonic--get-tracks
+   "getRandomSongs" 'randomSongs 'song
+   `(("size" . ,(number-to-string n)))))
+
 (defun listen-subsonic-queue-random (n queue)
-  "Fetch N random songs from the server and add them to QUEUE."
+  "Add N random songs to QUEUE."
   (interactive
    (list
     (read-number "Number of songs: " 10)
     (listen-queue-complete :allow-new-p t)))
-  (let* ((tracks (listen-subsonic--get-tracks
-                  "getRandomSongs" 'randomSongs 'song
-                  `(("size" . ,(number-to-string n))))))
-    (listen-queue-add-tracks tracks queue)))
+  (listen-queue-add-tracks (listen-subsonic-get-random-tracks n) queue))
 
 (defun listen-subsonic-queue-playlist (queue)
   "Prompt for a playlist and add its tracks to QUEUE."
@@ -694,10 +698,42 @@ Displays album count for artists, artist/year for albums, and duration for songs
 
 ;; TODO: Implement this. I am imagining a completing-read menu for different options similar to the
 ;;       library one.
-(defun listen-queue-add-from-subsonic (queue)
-  "Present a list of options for adding Subsonic tracks to the QUEUE."
+(defun listen-subsonic-source ()
+  "Present a list of options for Subsonic sources.
+Returns a cons (source . list of `listen-track's)."
+  (let* ((source (completing-read "Source: "
+                                  '("Find"
+                                    "Starred Tracks"
+                                    "Playlist"
+                                    "Search"
+                                    "Random")
+                                  nil t))
+         (tracks (pcase source
+                   ("Starred Tracks"
+                    (listen-subsonic-get-starred-tracks))
+                   ("Find"
+                    (listen-subsonic-find))
+                   ("Playlist"
+                    (listen-subsonic--get-playlist-tracks (listen-subsonic--read-playlist)))
+                   ("Search"
+                    (let ((query (read-string "Search: ")))
+                      (listen-subsonic-search-tracks query)))
+                   ("Random"
+                    (listen-subsonic-get-random-tracks listen-subsonic-search-max-results)))))
+    (cons source tracks)))
+
+(defun listen-queue-add-from-subsonic ()
+  "Present a list of Subsonic sources, and add tracks from that source to a queue."
   (interactive)
-  (listen-subsonic-search))
+  (let ((tracks (cdr (listen-subsonic-source)))
+        (queue (listen-queue-complete :allow-new-p t)))
+    (listen-queue-add-tracks tracks queue)))
+
+(defun listen-library-from-subsonic ()
+  (interactive)
+  (let* ((src (listen-subsonic-source)))
+    (listen-library (cdr src)
+                    :name (format "Subsonic: %s" (car src)))))
 
 ;; TODO: C-u adds to start of queue/next? Waiting for listen-queue function to enable
 (defun listen-subsonic--search (query)
@@ -779,38 +815,6 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
                (let ((tracks (funcall (nth 0 result))))
                  (listen-queue-add-tracks tracks queue)
                  (message "Added %d tracks from '%s'." (length tracks) name))))))))))
-
-;; TODO: add dired browser to this?
-(defun listen-library-from-subsonic (&optional source)
-  "Show a `listen-library' buffer with content from SOURCE.
-
-SOURCE may be one of:
-- \"Find\": Allows the user to browse a directory tree.
-- \"Starred Tracks\": Library from starred tracks.
-- \"Playlist\": Library from a playlist.
-- \"Search\": Library from a search query."
-  (interactive
-   (list (completing-read "Source: "
-                          '("Find"
-                            "Starred Tracks"
-                            "Playlist"
-                            "Search")
-                          nil t)))
-  (let ((tracks-fn
-         (pcase source
-           ("Starred Tracks"
-            (lambda () (listen-subsonic-get-starred-tracks)))
-           ("Find"
-            (lambda () (listen-subsonic-find)))
-           ("Playlist"
-            (lambda ()
-              (listen-subsonic--get-playlist-tracks (listen-subsonic--read-playlist))))
-           ("Search"
-            (lambda ()
-              (let ((query (read-string "Search: ")))
-                (listen-subsonic-search-tracks query)))))))
-    (listen-library tracks-fn
-                    :name (format "Subsonic: %s" source))))
 
 ;; TODO: Make this send a clear cache request to server too?
 (defun listen-subsonic-clear-cache ()
