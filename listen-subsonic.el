@@ -20,118 +20,20 @@
 
 ;;; Commentary:
 
-;; * OpenSubsonic API Implementation
-;; ** 1.0.0
-;; - [ ] download
-;; - [-] getCoverArt
-;; - [-] getIndexes
-;; - [ ] getLicense
-;; - [-] getMusicDirectory
-;; - [-] getMusicFolders
-;; - [ ] getNowPlaying
-;; - [X] getPlaylist
-;; - [X] getPlaylists
-;; - [X] ping
-;; - [-] search (we have search3)
-;; - [X] stream
-;; ** 1.1.0
-;; - [-] changePassword
-;; - [-] createUser
-;; ** 1.2.0
-;; - [-] addChatMessage
-;; - [X] createPlaylist
-;; - [X] deletePlaylist
-;; - [ ] getAlbumList
-;; - [-] getChatMessages
-;; - [ ] getLyrics
-;; - [X] getRandomSongs
-;; - [-] jukeboxControl
-;; ** 1.3.0
-;; - [-] deleteUser
-;; - [-] getUser
-;; ** 1.4.0
-;; - [-] search2 (we have search3)
-;; ** 1.5.0
-;; - [X] scrobble
-;; ** 1.6.0
-;; - [-] createShare
-;; - [-] deleteShare
-;; - [-] getPodcasts
-;; - [-] getShares
-;; - [ ] setRating
-;; - [-] updateShare
-;; ** 1.8.0
-;; - [X] getAlbum
-;; - [-] getAlbumList2
-;; - [X] getArtist
-;; - [X] getArtists
-;; - [-] getAvatar
-;; - [-] getSong
-;; - [-] getStarred
-;; - [X] getStarred2
-;; - [-] getUsers
-;; - [-] getVideos
-;; - [-] hls
-;; - [X] search3
-;; - [X] star
-;; - [X] unstar
-;; - [ ] updatePlaylist
-;; ** 1.9.0
-;; - [ ] createBookmark
-;; - [-] createPodcastChannel
-;; - [ ] deleteBookmark
-;; - [-] deletePodcastChannel
-;; - [-] deletePodcastEpisode
-;; - [-] downloadPodcastEpisode
-;; - [ ] getBookmarks
-;; - [ ] getGenres
-;; - [-] getInternetRadioStations
-;; - [-] getSongsByGenre
-;; - [-] refreshPodcasts
-;; ** 1.10.1
-;; - [-] updateUser
-;; ** 1.11.0
-;; - [ ] getArtistInfo
-;; - [ ] getArtistInfo2
-;; - [ ] getSimilarSongs
-;; - [ ] getSimilarSongs2
-;; ** 1.12.0(100.0%)
-;; - [-] getPlayQueue
-;; - [-] savePlayQueue
-;; ** 1.13.0
-;; - [-] getNewestPodcasts
-;; - [ ] getTopSongs
-;; ** 1.14.0
-;; - [-] getAlbumInfo
-;; - [-] getAlbumInfo2
-;; - [-] getCaptions
-;; - [-] getVideoInfo
-;; ** 1.15.0
-;; - [ ] getScanStatus
-;; - [ ] startScan
-;; ** 1.16.0
-;; - [-] createInternetRadioStation
-;; - [-] deleteInternetRadioStation
-;; - [-] updateInternetRadioStation
-
 ;;
 
 ;;; Code:
 
 ;;;; Requirements
 
+;; TODO: Move api calls to infrasonic
 ;; TODO: Some kind of indicator to show if track is starred or not
 ;; TODO: Send bookmark request to server periodically
 ;; TODO: When emacs 31.1 is released, cl-decf/cl-incf -> decf/incf
 
-(require 'plz)          ; HTTP requests
-(require 'auth-source)  ; authinfo
+(require 'infrasonic)   ; For Subsonic backend
 (require 'listen-queue) ; Add tracks to queue
 (require 'svg-lib)      ; For starred icon
-
-(require 'cl-lib)       ; for cl-incf/decf
-(require 'map)          ; for map-let and map-elt
-(require 'url-util)     ; for url-build-query-string
 
 ;; Declares
 
@@ -143,30 +45,7 @@
   "`listen' options for Subsonic backend."
   :group 'listen)
 
-(defcustom listen-subsonic-url nil
-  "The fully-qualified domain name of your Subsonic-compatible server.
-For example, \"music.example.com\" or \"192.168.0.0:4533\".
-Don't include the procol/scheme or the resource path."
-  :type 'string
-  :group 'listen-subsonic)
-
-(defcustom listen-subsonic-protocol "https"
-  "Protocol to use for calls to Subsonic API.
-Must be either \"http\" or \"https\" (default)."
-  :type '(choice (const :tag "HTTPS" "https")
-                 (const :tag "HTTP" "http"))
-  :group 'listen-subsonic)
-
-(defcustom listen-subsonic-search-max-results 200
-  "Maximum results to return in search queries."
-  :type 'integer
-  :group 'listen-subsonic)
-
-(defcustom listen-subsonic-user-agent "listen.el"
-  "User-agent used in API requests.
-Used by the server to identify `listen'."
-  :type 'string
-  :group 'listen-subsonic)
+;; Users set infrasonic variables for URL, protocol, etc.
 
 (defface listen-starred
   '((t :inherit font-lock-warning-face))
@@ -191,125 +70,19 @@ Used to keep concurrent downloads below `listen-subsonic--art-max'.")
   "Max allowed concurrent downloads.
 Used to limit connections to the server.")
 
-(defvar listen-subsonic--auth-params nil
-  "The authentication URL parameters.
-This should not be set globally.
-For batch operations, this is let-bound.
-For other operations, generate on the fly using `listen-subsonic--get-auth-params'.")
-
 (defvar listen-subsonic--menu-max-width 50
   "Maximum width of strings returned by search function.")
 
 ;;;; General helpers
 
-;;;; Auth helpers
-
-(defun listen-subsonic--get-credentials ()
-  "Fetch user credentials securely using `auth-source'.
-Returns an auth-source plist, or nil if not found.
-
-Searches `auth-source' files for an entry with \":host\" matching `listen-subsonic-url'."
-  (car (auth-source-search :host listen-subsonic-url)))
-
-;; NOTE: Token and salt are leaked when mpv is called with a URL
-(defun listen-subsonic--get-auth-params ()
-  "Return authentication info for Subsonic API calls.
-Return an alist of strings: ((\"u\" . \"myusername\") (\"t\" . \"<randomstring>\") ...)."
-  (or listen-subsonic--auth-params
-      (let* ((creds (listen-subsonic--get-credentials))
-             (user (plist-get creds :user))
-             (pass (funcall (plist-get creds :secret)))
-             (salt (format "%06x" (random #xffffff)))
-             (token (secure-hash 'md5 (concat pass salt))))
-        `(("u" . ,user)
-          ("t" . ,token)
-          ("s" . ,salt)
-          ("v" . "1.16.1")
-          ("c" . ,listen-subsonic-user-agent)
-          ("f" . "json")))))
-
-(defun listen-subsonic--build-url (endpoint params)
-  "Build a Subsonic REST API URL from ENDPOINT and PARAMS.
-Returns a complete URL required to make an API call.
-
-ENDPOINT is the API method name, see `https://www.navidrome.org/docs/developers/subsonic-api/' for
-details.
-PARAMS is an alist of query parameters."
-  (let* ((param-list (mapcar (lambda (p)
-                               (list (car p) (cdr p)))
-                             params))
-         (param-str (url-build-query-string param-list nil t)))
-    (format "%s://%s/rest/%s.view?%s"
-            listen-subsonic-protocol
-            listen-subsonic-url
-            endpoint
-            param-str)))
-
-;;;; API Helpers
-
-(defun listen-subsonic--process-api-response ()
-  "Parse JSON response from a Subsonic API request.
-Returns data contained in `subsonic-response' alist, or signals an error.
-
-Should be called from a buffer containing an API response."
-  (goto-char (point-min))
-  (when (zerop (buffer-size))
-    (error "Subsonic API response is empty"))
-  (let* ((json-data (json-parse-buffer :object-type 'alist
-                                       :null-object nil
-                                       :false-object nil
-                                       :array-type 'list))
-         (response (alist-get 'subsonic-response json-data)))
-    (unless (string-equal "ok" (alist-get 'status response))
-      (error "Subsonic API response returned error: %s"
-             (alist-get 'message (alist-get 'error response))))
-    response))
-
-(defun listen-subsonic--api-call (endpoint &optional params callback body)
-  "Make a call to the Subsonic API.
-Returns the parsed JSON if CALLBACK is nil.
-Returns the curl process object if CALLBACK is non-nil.
-
-ENDPOINT is the API method name, see `https://www.navidrome.org/docs/developers/subsonic-api/' for
-details.
-PARAMS is an alist of additional parameters.
-If CALLBACK is nil, run synchronously and parse the JSON response.
-If CALLBACK is non-nil, run asynchronously and parse the JSON response, then call CALLBACK on the
-parsed JSON.
-
-The JSON should usually be processed by `listen-subsonic--process-api-response'."
-  (unless listen-subsonic-url
-    (user-error "Please set `listen-subsonic-url'"))
-  (let* ((api-params (append (listen-subsonic--get-auth-params) params))
-         (http-method (if body 'post 'get))
-         (api-url (listen-subsonic--build-url endpoint api-params))
-         (api-headers '(("Accept-Encoding" . "gzip")
-                        ("Content-Type" . "application/x-www-form-urlencoded"))))
-    (plz http-method api-url
-      :headers api-headers
-      :body body
-      :as #'listen-subsonic--process-api-response
-      :then (or callback 'sync)
-      :else (lambda (err) (user-error "Subsonic API request error: %s" err)))))
-
-;;;; Data formatting
-
-(defun listen-subsonic--get-stream-url (id)
-  "Create a streaming URL for track with ID.
-Returns a complete URL for MPV or VLC to directly stream from the server."
-  (listen-subsonic--build-url
-   "stream"
-   (append (listen-subsonic--get-auth-params)
-           `(("id" . ,id)))))
-
 (defun listen-subsonic--json-to-listen (json-data)
-  "Convert Subsonic JSON-DATA into a `listen-track'.
+  "Convert an `infrasonic' JSON-DATA into a `listen-track'.
 Returns a `listen-track' struct."
   (map-let
       (('id id) ('userRating rating) artist title album track genre duration year starred)
       json-data
     (make-listen-track
-     :filename (listen-subsonic--get-stream-url id) ; silly mpv
+     :filename (infrasonic-get-stream-url id) ; silly mpv
      :artist artist
      :title title
      :album album
@@ -326,53 +99,25 @@ Returns a `listen-track' struct."
 
 ;;;; Read requests
 
-(defun listen-subsonic--get-tracks (endpoint rootkey itemkey &optional params)
-  "Get data from ENDPOINT, and extract `listen-track's using ROOTKEY and ITEMKEY.
-Returns a list of `listen-track's.
-
-ENDPOINT is the API method name, see `https://www.navidrome.org/docs/developers/subsonic-api/' for
-details.
-ROOTKEY is the top-level JSON key in the API repsonse, ITEMKEY is the
-inner key (for example, \"searchResult3\" and \"song\"). Go to the above link for details.
-PARAMS are optional API parameters."
-  (when-let* ((response (listen-subsonic--api-call endpoint params))
-              (items (map-nested-elt response (list rootkey itemkey))))
-    (mapcar (lambda (item)
-              (listen-subsonic--json-to-listen item))
-            items)))
-
 (defun listen-subsonic-search-tracks (query)
   "Search the server for tracks matching QUERY.
 Returns a list of `listen-track's.
 
 Uses the Subsonic API's \"search3\" endpoint with QUERY as the search query."
-  (listen-subsonic--get-tracks
-   "search3" 'searchResult3 'song
-   `(("query" . ,query)
-     ("songCount" . ,(number-to-string listen-subsonic-search-max-results)))))
+  (mapcar #'listen-subsonic--json-to-listen
+          (infrasonic-search-tracks query)))
 
 (defun listen-subsonic-get-starred-tracks ()
   "Fetch all starred songs from the server.
 Returns a list of `listen-track's."
-  (listen-subsonic--get-tracks
-   "getStarred2" 'starred2 'song))
-
-(defun listen-subsonic--get-playlists ()
-  "Fetch all of the user's playlists from the server.
-Returns an alist mapping playlist names to their IDs: ((name . id) ...)."
-  (when-let* ((response (listen-subsonic--api-call "getPlaylists"))
-              (items (map-nested-elt response '(playlists playlist))))
-    (mapcar (lambda (item)
-              (cons (alist-get 'name item)
-                    (format "%s" (alist-get 'id item))))
-            items)))
+  (mapcar #'listen-subsonic--json-to-listen
+          (infrasonic-get-starred-tracks)))
 
 (defun listen-subsonic--get-playlist-tracks (id)
   "Fetch all tracks in playlist with ID.
 Returns a list of `listen-track's."
-  (listen-subsonic--get-tracks
-   "getPlaylist" 'playlist 'entry
-   `(("id" . ,id))))
+  (mapcar #'listen-subsonic--json-to-listen
+          (infrasonic-get-playlist-tracks id)))
 
 (defun listen-subsonic--get-all-tracks (id &optional level)
   "Fetch all tracks under item associated with ID.
@@ -381,35 +126,10 @@ Returns a list of `listen-track's.
 LEVEL determines what level of the hierarchy we are on:
 - :artist: fetches all albums, then all songs by that artist.
 - :album: fetches all songs on the album."
-  (let ((listen-subsonic--auth-params (listen-subsonic--get-auth-params)))
-    (pcase level
-      (:artist
-       (let* ((data (listen-subsonic--api-call "getArtist" `(("id" . ,id))))
-              (albums (map-nested-elt data '(artist album))))
-         (mapcan (lambda (album)
-                   (listen-subsonic--get-all-tracks (alist-get 'id album) :album))
-                 albums)))
-      (:album
-       (listen-subsonic--get-tracks
-        "getAlbum" 'album 'song
-        `(("id" . ,id)))))))
+  (mapcar #'listen-subsonic--json-to-listen
+          (infrasonic-get-all-tracks id level)))
 
 ;;;; Write requests
-
-(defun listen-subsonic--create-playlist (ids name)
-  "Create a playlist with NAME containing IDS on the server.
-Returns the newly created playlist."
-  ;; we have to pass one songId per song
-  (let* ((body-list (cons `("name" ,name)
-                          (mapcar (lambda (id)
-                                    (list "songId" id))
-                                  ids)))
-         (body-str (url-build-query-string body-list nil t)))
-    ;; Use post and put long list of songId params in post body.
-    (unless (listen-subsonic--api-call "createPlaylist"
-                                       nil nil
-                                       body-str)
-      (user-error "Playlist was not created."))))
 
 (defun listen-subsonic-create-playlist (queue name)
   "Create a Subsonic playlist named NAME from tracks in QUEUE.
@@ -425,33 +145,8 @@ Only tracks with the source \"subsonic\" will be included."
                            (list (alist-get 'id etc)))))
                      (listen-queue-tracks queue))))
     (if ids
-        (progn
-          (listen-subsonic--create-playlist ids name)
-          (message "Created playlist '%s' with %d tracks." name (length ids)))
+        (infrasonic-create-playlist ids name)
       (user-error "No Subsonic tracks found"))))
-
-(defun listen-subsonic-delete-playlist (id)
-  "Delete a Subsonic playlist with ID.
-
-When called interactively, show a prompt for their playlists using
-`listen-subsonic--read-playlist'."
-  (interactive (list (listen-subsonic--read-playlist)))
-  (when (listen-subsonic--api-call "deletePlaylist"
-                                   `(("id" . ,id)))
-    (message "Playlist deleted.")))
-
-(defun listen-subsonic--star-item (id star-p &optional callback)
-  "Set ID's (artist, album or track) star status according to STAR-P.
-Returns the unparsed API response.
-
-Send a request to the \"star\" or \"unstar\" Subsonic endpoints, star (when STAR-P is non-nil) or
-unstar ID. CALLBACK is passed to `listen-subsonic--api-call' and is evaluated on the response data.
-
-This function does not set the corresponding item's star status locally. Perhaps use CALLBACK for
-this."
-  (listen-subsonic--api-call (if star-p "star" "unstar")
-                             `(("id" . ,id))
-                             callback))
 
 (defun listen-subsonic--scrobble (player submission-p)
   "Scrobble the current track playing in PLAYER's queue to the Subsonic API.
@@ -463,9 +158,7 @@ When SUBMISSION-P is nil, server is notified the current tracks is \"now playing
               (track (listen-queue-current queue))
               (source (equal (map-elt (listen-track-etc track) 'source) "subsonic"))
               (id (alist-get 'id (listen-track-etc track))))
-    (let* ((params `(("id" . ,id)
-                     ("submission" . ,(if submission-p "true" "false")))))
-      (listen-subsonic--api-call "scrobble" params #'ignore))))
+    (infrasonic-scrobble id submission-p)))
 
 (defun listen-subsonic-scrobble-start (player)
   "Notifies the server that we have started playing a track in PLAYER.
@@ -493,7 +186,7 @@ LEVEL determines the endpoint to use, and may be one of:
   (let ((items
          (pcase level
            (:artists
-            (let* ((data (listen-subsonic--api-call "getArtists"))
+            (let* ((data (infrasonic-api-call "getArtists"))
                    (indexes (map-nested-elt data '(artists index))))
               ;; res is organised alphabetically, so we have to flatten
               (mapcan (lambda (idx)
@@ -505,7 +198,7 @@ LEVEL determines the endpoint to use, and may be one of:
                                   artists)))
                       indexes)))
            (:artist
-            (let* ((data (listen-subsonic--api-call "getArtist" `(("id" . ,id))))
+            (let* ((data (infrasonic-api-call "getArtist" `(("id" . ,id))))
                    (albums (map-nested-elt data '(artist album))))
               (mapcar (lambda (album)
                         (append '((subsonic-type . :album)
@@ -513,7 +206,7 @@ LEVEL determines the endpoint to use, and may be one of:
                                 album))
                       albums)))
            (:album
-            (let* ((data (listen-subsonic--api-call "getAlbum" `(("id" . ,id))))
+            (let* ((data (infrasonic-api-call "getAlbum" `(("id" . ,id))))
                    (tracks (map-nested-elt data '(album song))))
               ;; getAlbum tracks dont have "name", the other 2 endpoints do
               (mapcar (lambda (track)
@@ -553,14 +246,6 @@ Example returns:
 
 ;;;; Interactive functions
 
-(defun listen-subsonic-ping-server ()
-  "Ping the server to check connectivity and authentication.
-Returns nil, only displaying a success or failure message."
-  (interactive)
-  (if (listen-subsonic--api-call "ping")
-      (message "Successfully pinged Subsonic server!")
-    (message "Failed to ping server.")))
-
 (defun listen-subsonic-star-track (track star-p)
   "Set TRACK's star status according to STAR-P.
 Returns the unparsed API response.
@@ -576,20 +261,12 @@ This function also sets TRACK's in-memory star status accordingly."
        (user-error "No track playing."))
      (list track (not (alist-get 'starred (listen-track-etc track))))))
   (when-let* ((id (alist-get 'id (listen-track-etc track))))
-    (listen-subsonic--star-item id
-                                star-p
-                                ;; update track in-memory
-                                (lambda (_)
-                                  (setf (alist-get 'starred (listen-track-etc track)) star-p)
-                                  (message "%s '%s'" (if star-p "Starred" "Unstarred")
-                                           (listen-track-title track))))))
-
-(defun listen-subsonic--read-playlist ()
-  "Prompt user to select a Subsonic playlist using `completing-read'.
-Returns the selected playlist's ID as a string."
-  (let* ((playlists (listen-subsonic--get-playlists))
-         (name (completing-read "Playlist: " playlists nil t)))
-    (alist-get name playlists nil nil #'equal)))
+    (infrasonic-star id star-p
+                     ;; update track in-memory
+                     (lambda (_)
+                       (setf (alist-get 'starred (listen-track-etc track)) star-p)
+                       (message "%s '%s'" (if star-p "Starred" "Unstarred")
+                                (listen-track-title track))))))
 
 (defun listen-subsonic--completing-read (prompt entries &optional extra-metadata)
   "Read a candidate with PROMPT from ENTRIES.
@@ -685,9 +362,8 @@ ITEM must include element with `car' \"starred\"."
 (defun listen-subsonic-get-random-tracks (n)
   "Fetch N random songs from the server.
 Returns a list of N `listen-track's."
-  (listen-subsonic--get-tracks
-   "getRandomSongs" 'randomSongs 'song
-   `(("size" . ,(number-to-string n)))))
+  (mapcar #'listen-subsonic--json-to-listen
+          (infrasonic-get-random-tracks)))
 
 (defun listen-subsonic-queue-random (n queue)
   "Add N random songs to QUEUE."
@@ -700,7 +376,7 @@ Returns a list of N `listen-track's."
 (defun listen-subsonic-queue-playlist (queue)
   "Prompt for a playlist and add its tracks to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
-  (let* ((id (listen-subsonic--read-playlist))
+  (let* ((id (infrasonic-read-playlist))
          (tracks (listen-subsonic--get-playlist-tracks id)))
     (listen-queue-add-tracks tracks queue)))
 
@@ -728,12 +404,12 @@ Returns a cons (source . list of `listen-track's)."
                    ("Find"
                     (listen-subsonic-find))
                    ("Playlist"
-                    (listen-subsonic--get-playlist-tracks (listen-subsonic--read-playlist)))
+                    (listen-subsonic--get-playlist-tracks (infrasonic-read-playlist)))
                    ("Search"
                     (let ((query (read-string "Search: ")))
                       (listen-subsonic-search-tracks query)))
                    ("Random"
-                    (listen-subsonic-get-random-tracks listen-subsonic-search-max-results)))))
+                    (listen-subsonic-get-random-tracks infrasonic-search-max-results)))))
     (cons source tracks)))
 
 (defun listen-queue-add-from-subsonic ()
@@ -758,15 +434,15 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
                    ("artistCount" . ,max-results)
                    ("albumCount" . ,max-results)
                    ("songCount" . ,max-results)))
-         (response (listen-subsonic--api-call "search3" params))
+         (response (infrasonic-api-call "search3" params))
          (result (alist-get 'searchResult3 response))
          (artists (alist-get 'artist result))
          (albums (alist-get 'album result))
          (tracks (alist-get 'song result)))
     (append
-     (mapcar (lambda (item) (cons (cons subsonic-type :artist) item)) artists)
-     (mapcar (lambda (item) (cons (cons subsonic-type :album) item)) albums)
-     (mapcar (lambda (item) (cons (cons subsonic-type :track) item)) tracks))))
+     (mapcar (lambda (item) (cons (cons 'subsonic-type :artist) item)) artists)
+     (mapcar (lambda (item) (cons (cons 'subsonic-type :album) item)) albums)
+     (mapcar (lambda (item) (cons (cons 'subsonic-type :track) item)) tracks))))
 
 ;; TODO: Truncate search results before it hits affixation
 (defun listen-subsonic-search (query)
@@ -979,11 +655,11 @@ If N is nil, the point will move up one line."
 
     (let* ((id (alist-get 'id item))
            (star-p (not (alist-get 'starred item))))
-      (listen-subsonic--star-item id star-p
-                                  (lambda (_)
-                                    (with-current-buffer buf
-                                      (revert-buffer)
-                                      (message "%s" (if star-p "Starred" "Unstarred"))))))))
+      (infrasonic-star id star-p
+                       (lambda (_)
+                         (with-current-buffer buf
+                           (revert-buffer)
+                           (message "%s" (if star-p "Starred" "Unstarred"))))))))
 
 (defvar listen-subsonic-dired-mode-map
   (let ((map (make-sparse-keymap)))
@@ -1031,15 +707,11 @@ recursively until the art queue is empty."
               (< listen-subsonic--art-active listen-subsonic--art-max))
     (cl-incf listen-subsonic--art-active)
     (pcase-let ((`(,url ,file ,buf ,pos) (pop listen-subsonic--art-queue)))
-      (plz 'get url
-        :as `(file ,file)
-        :then (lambda (_)
-                (cl-decf listen-subsonic--art-active)
-                (listen-subsonic--display-art file buf pos)
-                (listen-subsonic--process-art-queue))
-        :else (lambda (_)
-                (cl-decf listen-subsonic--art-active)
-                (listen-subsonic--process-art-queue))))))
+      (infrasonic-get-art url file
+                          (lambda (_)
+                            (cl-decf listen-subsonic--art-active)
+                            (listen-subsonic--display-art file buf pos)
+                            (listen-subsonic--process-art-queue))))))
 
 (defun listen-subsonic--dired-fetch-art (id buf pos)
   "Queue a download for artwork with ID to be displayed at POS in BUF.
@@ -1050,10 +722,7 @@ Art is asynchronously displayed in the Listen Subsonic Dired buffer as it is dow
   (unless (file-exists-p listen-subsonic-cache-dir)
     (make-directory listen-subsonic-cache-dir))
   (let ((file (expand-file-name (format "%s.jpg" id) listen-subsonic-cache-dir))
-        (url (listen-subsonic--build-url
-              "getCoverArt"
-              (append (listen-subsonic--get-auth-params)
-                      `(("id" . ,id) ("size" . "64"))))))
+        (url (infrasonic-get-art-url id 64)))
     (if (file-exists-p file)
         ;; cached
         (listen-subsonic--display-art file buf pos)
