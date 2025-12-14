@@ -205,7 +205,7 @@ For other operations, generate on the fly using `listen-subsonic--get-auth-param
 Returns an auth-source plist, or nil if not found.
 
 Searches `auth-source' files for an entry with \":host\" matching `listen-subsonic-url'."
-  (or (car (auth-source-search :host listen-subsonic-url)) nil))
+  (car (auth-source-search :host listen-subsonic-url)))
 
 (defun listen-subsonic--get-auth-params ()
   "Return authentication info for Subsonic API calls.
@@ -285,9 +285,7 @@ The JSON should usually be processed by `listen-subsonic--process-api-response'.
       :body body
       :as #'listen-subsonic--process-api-response
       :then (or callback 'sync)
-      :else (lambda (err)
-              (message "Subsonic API request error: %s"
-                       (status (plz-response-status (plz-error-response err))))))))
+      :else (lambda (err) (message "Subsonic API request error: %s" err)))))
 
 ;;;; Data formatting
 
@@ -460,7 +458,7 @@ When SUBMISSION-P is nil, server is notified the current tracks is \"now playing
               (track (listen-queue-current queue))
               (source (equal (map-elt (listen-track-etc track) 'source) "subsonic"))
               (id (alist-get 'id (listen-track-etc track))))
-    (let* ((params `(("id". ,id)
+    (let* ((params `(("id" . ,id)
                      ("submission" . ,(if submission-p "true" "false")))))
       (listen-subsonic--api-call "scrobble" params #'ignore))))
 
@@ -522,19 +520,18 @@ Hierarchy is: :artists -> :artist -> :album."
 Returns a formatted string of length up to 15 characters.
 
 Example returns:
-- Starred song: \"- * 2004 3:43\"
-- Artist:       \"d - ---- ----\"
-- Album:        \"d - 2004 ----\""
+- Starred song: \"- * 2004  3:43\"
+- Artist:       \"d - ---- 53:19\"
+- Album:        \"d - 2004 --:--\""
   (let* ((dirp (alist-get 'isDir item))
          (year (alist-get 'year item))
          (duration (alist-get 'duration item))
-         (starred (alist-get 'starred item))
-         (bitrate (alist-get 'bitRate item)))
+         (starred (alist-get 'starred item)))
     (format "%s %s %4s %5s "
             (if dirp "d" "-")
             (if starred "*" "-")
             (if year (number-to-string year) "----")
-            (if dirp "--:--" (listen-format-seconds duration)))))
+            (if duration (listen-format-seconds duration) "--:--"))))
 
 ;;;; Interactive functions
 
@@ -752,7 +749,7 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
         (push (cons disp-name item) entries)))
     (setq entries (nreverse entries))
 
-    (let* ((affix-fn (listen-subsonic--affixation-alist
+    (let* ((affix-fn (listen-subsonic--affixation
                       entries
                       #'listen-subsonic--search-suffix 'completions-annotations
                       #'listen-subsonic--search-prefix))
@@ -826,7 +823,6 @@ SOURCE may be one of:
 ;; Completing read browser
 ;; TODO: unify the logic used by the minibuffer browser and the buffer browser
 ;; TODO: have this add to queue
-;; FIXME: Affixation function broken.
 (defun listen-subsonic-find ()
   "Browse the Subsonic library hierarchy using `completing-read'.
 
@@ -956,13 +952,15 @@ If N is nil, the point will move up one line."
   "Major mode for browsing Subsonic libraries with a `dired'-like interface."
   :interactive nil
   :keymap listen-subsonic-dired-mode-map
-  (setq-local revert-buffer-function #'listen-subsonic--dired-revert
-              listen-subsonic--dired-history nil
-              listen-subsonic--dired-current-id nil
-              listen-subsonic--dired-current-name nil
-              listen-subsonic--dired-current-level nil))
+  (setq-local revert-buffer-function #'listen-subsonic--dired-revert)
+  (defvar-local listen-subsonic--dired-history nil)
+  (defvar-local listen-subsonic--dired-current-id nil)
+  (defvar-local listen-subsonic--dired-current-name nil)
+  (defvar-local listen-subsonic--dired-current-level nil))
 
 ;; TODO: make it easier to add to queue
+;; TODO: Allow selecting multiple similar to dired (m to mark)
+;; TODO: remember point position when going down and back up
 (defun listen-subsonic-dired ()
   "Create or switch to the Listen Subsonic Dired buffer.
 
@@ -1107,10 +1105,11 @@ Inserts a header, navigation buttons and the list of items."
                    (listen-subsonic--get-all-tracks listen-subsonic--dired-current-id :album))
                   (_
                    (user-error "Cannot add all tracks under the current view")))))
-    (when tracks
-      (listen-queue-add-tracks tracks (listen-queue-complete))
-      (message "Added %d tracks to the queue." (length tracks)))
-    (message "No tracks found.")))
+    (if tracks
+        (progn
+          (listen-queue-add-tracks tracks (listen-queue-complete))
+          (message "Added %d tracks to the queue." (length tracks)))
+      (message "No tracks found."))))
 
 (defun listen-subsonic--dired-button (&optional button)
   "Activate the text BUTTON at point.
