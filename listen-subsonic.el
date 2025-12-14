@@ -1,4 +1,4 @@
-;;; Listen-Subsonic.El --- Subsonic server support for listen.el         -*- lexical-binding: t; -*-
+;;; listen-subsonic.el --- Subsonic server support for listen.el         -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2025  Free Software Foundation, Inc.
 
@@ -611,6 +611,7 @@ EXTRA-METADATA is an alist of completion metadata pairs for `completing-read', t
 
 (defun listen-subsonic--affixation (entries &optional suffix-fn suffix-face prefix-fn prefix-face)
   "Create an affixation function for `completing-read' using ENTRIES.
+Returns a list of lists, where each element is (candidate prefix suffix)
 
 ENTRIES is an alist of display strings and their corresponding item: ((disp-str . item) ...).
 Where an item in the ENTRIES alist may be:
@@ -626,7 +627,7 @@ PREFIX-FACE is applied to the prefix."
      (lambda (cand)
        (let ((item (alist-get cand entries nil nil #'equal)))
          (if (memq item '(:up :this))
-             (list cand "" "")
+             (list cand "  " "")
            (let* ((len (string-width cand))
                   (padding (make-string (- listen-subsonic--menu-max-width len) ?\s))
                   (suf (if suffix-fn (funcall suffix-fn item) ""))
@@ -652,13 +653,13 @@ ITEM must include element with `car' \"subsonic-type\" for determining which suf
      (format "%s albums" (or (alist-get 'albumCount item) 0)))
     (:album
      (concat (listen-subsonic--format-column (alist-get 'artist item)
-                                             20 'listen-artist)
+                                             12 'listen-artist)
              " "
              (when-let* ((year (alist-get 'year item)))
                (format "(%s)" year))))
     (:track
      (concat (listen-subsonic--format-column (alist-get 'artist item)
-                                             20 'listen-artist)
+                                             12 'listen-artist)
              " "
              (listen-subsonic--format-column (alist-get 'album item)
                                              20 'listen-album)
@@ -680,27 +681,6 @@ ITEM must include element with `car' \"starred\"."
 (defun listen-subsonic--playlist-suffix (playlist)
   "Returns PLAYLIST's song count to be used as an `affixation-function' suffix."
   (concat (number-to-string (or (alist-get 'songCount playlist) 0)) " tracks"))
-
-(defun listen-subsonic--node-suffix (node)
-  "Returns affixation suffix for NODE.
-
-Displays album count for artists, artist/year for albums, and duration for songs."
-  (cond
-   ;; ".." and "[All]"
-   ((symbolp node) "")
-   ;; Artist has albumCount
-   ((alist-get 'albumCount node)
-    (format "%s albums" (alist-get 'albumCount node)))
-   ;; Album has songCount
-   ((alist-get 'songCount node)
-    (concat (alist-get 'artist node)
-            (when-let* ((year (alist-get 'year node)))
-              (format " (%s)" year))))
-   ;; Song has suffix (which is flac, mp3 etc)
-   ((alist-get 'suffix node)
-    (listen-format-seconds (or (alist-get 'duration node) 0)))
-   ;; Fallback to empty string
-   (t "")))
 
 (defun listen-subsonic-get-random-tracks (n)
   "Fetch N random songs from the server.
@@ -783,10 +763,10 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
          (artists (alist-get 'artist result))
          (albums (alist-get 'album result))
          (tracks (alist-get 'song result)))
-    (nconc
-     (mapcar (lambda (item) (cons '(subsonic-type . :artist) item)) artists)
-     (mapcar (lambda (item) (cons '(subsonic-type . :album) item)) albums)
-     (mapcar (lambda (item) (cons '(subsonic-type . :track) item)) tracks))))
+    (append
+     (mapcar (lambda (item) (cons (cons subsonic-type :artist) item)) artists)
+     (mapcar (lambda (item) (cons (cons subsonic-type :album) item)) albums)
+     (mapcar (lambda (item) (cons (cons subsonic-type :track) item)) tracks))))
 
 ;; TODO: Truncate search results before it hits affixation
 (defun listen-subsonic-search (query)
@@ -850,20 +830,29 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
 
       (let ((type (alist-get 'subsonic-type selected)))
         (pcase type
+          (:artist
+           (when-let* ((name (alist-get 'name selected))
+                       (result (listen-subsonic--find-step
+                                :artist
+                                (alist-get 'id selected)
+                                name))
+                       (tracks (funcall (nth 0 result))))
+             (listen-queue-add-tracks tracks (listen-queue-complete :allow-new-p t))
+             (message "Added %d tracks from '%s'." (length tracks) name)))
+          (:album
+           (when-let* ((name (alist-get 'name selected))
+                       (result (listen-subsonic--find-step
+                                :album
+                                (alist-get 'id selected)
+                                name))
+                       (tracks (funcall (nth 0 result))))
+             (listen-queue-add-tracks tracks (listen-queue-complete :allow-new-p t))
+             (message "Added %d tracks from '%s'." (length tracks) name)))
           (:track
            ;; add a track to the queue
            (let ((track (listen-subsonic--json-to-listen selected)))
              (listen-queue-add-tracks (list track) (listen-queue-complete :allow-new-p t))
-             (message "Added '%s' to the queue." (listen-track-title track))))
-          (_ ; artist or album
-           (let ((id (alist-get 'id selected))
-                 (name (alist-get 'name selected))
-                 (next (if (string= type "Artist") :artist :album)))
-             ;; hand over to --find-step
-             (when-let* ((result (listen-subsonic--find-step next id name)))
-               (let ((tracks (funcall (nth 0 result))))
-                 (listen-queue-add-tracks tracks (listen-queue-complete :allow-new-p t))
-                 (message "Added %d tracks from '%s'." (length tracks) name))))))))))
+             (message "Added '%s' to the queue." (listen-track-title track)))))))))
 
 ;; TODO: Make this send a clear cache request to server too?
 (defun listen-subsonic-clear-cache ()
@@ -928,7 +917,7 @@ HISTORY is a stack containint the user's navigation history."
 
     (let* ((affix-fn (listen-subsonic--affixation
                       entries
-                      #'listen-subsonic--node-suffix nil
+                      #'listen-subsonic--item-suffix nil
                       #'listen-subsonic--item-prefix nil))
            (selection (listen-subsonic--completing-read
                        prompt entries
