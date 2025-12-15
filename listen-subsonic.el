@@ -347,10 +347,17 @@ Returns a list of N `listen-track's."
     (listen-queue-complete :allow-new-p t)))
   (listen-queue-add-tracks (listen-subsonic-get-random-tracks n) queue))
 
+(defun listen-subsonic--read-playlist ()
+  "Prompt user to select a Subsonic playlist using `completing-read'.
+Returns the selected playlist's ID as a string."
+  (let* ((playlists (infrasonic-get-playlists))
+         (name (completing-read "Playlist: " playlists nil t)))
+    (alist-get name playlists nil nil #'equal)))
+
 (defun listen-subsonic-queue-playlist (queue)
   "Prompt for a playlist and add its tracks to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
-  (let* ((id (infrasonic-read-playlist))
+  (let* ((id (listen-subsonic--read-playlist))
          (tracks (listen-subsonic--get-playlist-tracks id)))
     (listen-queue-add-tracks tracks queue)))
 
@@ -383,7 +390,7 @@ Returns a cons (source . list of `listen-track's)."
                     (let ((query (read-string "Search: ")))
                       (listen-subsonic-search-tracks query)))
                    ("Random"
-                    (listen-subsonic-get-random-tracks infrasonic-search-max-results)))))
+                    (listen-subsonic-get-random-tracks 100)))))
     (cons source tracks)))
 
 (defun listen-queue-add-from-subsonic ()
@@ -511,7 +518,7 @@ Select the \"..\" option to move up/back in the hierarchy."
 Returns a list (function name) for the selected action, or nil to go up/back.
 
 LEVEL, ID, and NAME define the current location.
-HISTORY is a stack containint the user's navigation history."
+HISTORY is a stack containing the user's navigation history."
   (let* ((items (listen-subsonic--get-nodes level id))
          (next (listen-subsonic--browser-next-level level))
          (prompt (if (eq level :artists)
@@ -822,7 +829,7 @@ Pops the previous state from `listen-subsonic--dired-history'."
 (defun listen-subsonic--dired-revert (_ignore-auto _noconfirm)
   "Reload the current browser view.
 
-Re fetches data for the current ID and level from the API."
+Re-fetches data for the current ID and level from the API."
   (let ((pt (point)))
     (listen-subsonic--dired-render listen-subsonic--dired-current-id
                                    listen-subsonic--dired-current-name
