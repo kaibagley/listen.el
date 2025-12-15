@@ -185,35 +185,9 @@ LEVEL determines the endpoint to use, and may be one of:
 - :album: Returns songs in an album using \"getAlbum\"."
   (let ((items
          (pcase level
-           (:artists
-            (let* ((data (infrasonic-api-call "getArtists"))
-                   (indexes (map-nested-elt data '(artists index))))
-              ;; res is organised alphabetically, so we have to flatten
-              (mapcan (lambda (idx)
-                        (let ((artists (alist-get 'artist idx)))
-                          (mapcar (lambda (artist)
-                                    (append '((subsonic-type . :artist)
-                                              (isDir . t))
-                                            artist))
-                                  artists)))
-                      indexes)))
-           (:artist
-            (let* ((data (infrasonic-api-call "getArtist" `(("id" . ,id))))
-                   (albums (map-nested-elt data '(artist album))))
-              (mapcar (lambda (album)
-                        (append '((subsonic-type . :album)
-                                  (isDir . t))
-                                album))
-                      albums)))
-           (:album
-            (let* ((data (infrasonic-api-call "getAlbum" `(("id" . ,id))))
-                   (tracks (map-nested-elt data '(album song))))
-              ;; getAlbum tracks dont have "name", the other 2 endpoints do
-              (mapcar (lambda (track)
-                        (append `((subsonic-type . :track)
-                                  (name . ,(alist-get 'title track)))
-                                track))
-                      tracks))))))
+           (:artists (infrasonic-get-artists))
+           (:artist (infrasonic-get-artist id))
+           (:album (infrasonic-get-album id)))))
     items))
 
 (defun listen-subsonic--browser-next-level (level)
@@ -425,25 +399,6 @@ Returns a cons (source . list of `listen-track's)."
     (listen-library (cdr src)
                     :name (format "Subsonic: %s" (car src)))))
 
-;; TODO: C-u adds to start of queue/next? Waiting for listen-queue function to enable
-(defun listen-subsonic--search (query)
-  "Search server for QUERY at \"search3\" endpoint.
-Returns a list of tagged items. Each item is an alist with an added keyword `subsonic-type'."
-  (let* ((max-results (number-to-string (/ listen-subsonic-search-max-results 3)))
-         (params `(("query" . ,query)
-                   ("artistCount" . ,max-results)
-                   ("albumCount" . ,max-results)
-                   ("songCount" . ,max-results)))
-         (response (infrasonic-api-call "search3" params))
-         (result (alist-get 'searchResult3 response))
-         (artists (alist-get 'artist result))
-         (albums (alist-get 'album result))
-         (tracks (alist-get 'song result)))
-    (append
-     (mapcar (lambda (item) (cons (cons 'subsonic-type :artist) item)) artists)
-     (mapcar (lambda (item) (cons (cons 'subsonic-type :album) item)) albums)
-     (mapcar (lambda (item) (cons (cons 'subsonic-type :track) item)) tracks))))
-
 ;; TODO: Truncate search results before it hits affixation
 (defun listen-subsonic-search (query)
   "Search the server for QUERY, and display artists, albums and tracks.
@@ -451,7 +406,7 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
 - Selecting a track adds it to the queue.
 - Selecting an artist or album opens the `listen-subsonic-find' browsing functionality."
   (interactive (list (read-string "Search: ")))
-  (let* ((items (listen-subsonic--search query))
+  (let* ((items (infrasonic-search query))
          (entries nil)
          (queue ))
 
@@ -468,10 +423,7 @@ Returns a list of tagged items. Each item is an alist with an added keyword `sub
              (name (propertize
                     (truncate-string-to-width
                      ;; Ensure that tracks have a name elem
-                     (pcase type
-                       (:artist (alist-get 'name item))
-                       (:album (alist-get 'name item))
-                       (:track (alist-get 'title item)))
+                     (alist-get 'name item)
                      (- listen-subsonic--menu-max-width 5) 0 nil t)
                     'face face))
              (disp-name name)
