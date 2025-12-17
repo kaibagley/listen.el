@@ -101,9 +101,7 @@ Returns a `listen-track' struct."
 
 (defun listen-subsonic-search-tracks (query)
   "Search the server for tracks matching QUERY.
-Returns a list of `listen-track's.
-
-Uses the Subsonic API's \"search3\" endpoint with QUERY as the search query."
+Returns a list of `listen-track's."
   (mapcar #'listen-subsonic--json-to-listen
           (infrasonic-search-tracks query)))
 
@@ -119,7 +117,7 @@ Returns a list of `listen-track's."
   (mapcar #'listen-subsonic--json-to-listen
           (infrasonic-get-playlist-tracks id)))
 
-(defun listen-subsonic--get-all-tracks (id &optional level)
+(defun listen-subsonic--get-all-tracks (id level)
   "Fetch all tracks under item associated with ID.
 Returns a list of `listen-track's.
 
@@ -148,27 +146,29 @@ Only tracks with the source \"subsonic\" will be included."
         (infrasonic-create-playlist ids name)
       (user-error "No Subsonic tracks found"))))
 
-(defun listen-subsonic--scrobble (player submission-p)
+(defun listen-subsonic--scrobble (player status)
   "Scrobble the current track playing in PLAYER's queue to the Subsonic API.
 Returns the unparsed API response.
 
-When SUBMISSION-P is non-nil, server is notified that the currently playing track is finished.
-When SUBMISSION-P is nil, server is notified the current tracks is \"now playing\"."
+Only tracks with the source \"subsonic\" will be scrobbled.
+
+When STATUS is `:finished', server is notified that the currently playing track is finished.
+When STATUS is `:playing', server is notified the current tracks is \"now playing\"."
   (when-let* ((queue (map-elt (listen-player-etc player) :queue))
               (track (listen-queue-current queue))
               (source (equal (map-elt (listen-track-etc track) 'source) "subsonic"))
               (id (alist-get 'id (listen-track-etc track))))
-    (infrasonic-scrobble id submission-p)))
+    (infrasonic-scrobble id status)))
 
 (defun listen-subsonic-scrobble-start (player)
   "Notifies the server that we have started playing a track in PLAYER.
 Should be added to `listen-track-start-functions'."
-  (listen-subsonic--scrobble player nil))
+  (listen-subsonic--scrobble player :playing))
 
 (defun listen-subsonic-scrobble-end (player)
   "Notifies the server that we have finished a track in PLAYER.
 Should be added to `listen-track-end-functions'."
-  (listen-subsonic--scrobble player t))
+  (listen-subsonic--scrobble player :finished))
 
 ;;;; Server browsing functions
 
