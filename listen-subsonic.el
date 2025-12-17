@@ -99,11 +99,11 @@ Returns a `listen-track' struct."
 
 ;;;; Read requests
 
-(defun listen-subsonic-search-tracks (query)
-  "Search the server for tracks matching QUERY.
-Returns a list of `listen-track's."
-  (mapcar #'listen-subsonic--json-to-listen
-          (infrasonic-search-tracks query)))
+;; (defun listen-subsonic-search-tracks (query)
+;;   "Search the server for tracks matching QUERY.
+;; Returns a list of `listen-track's."
+;;   (mapcar #'listen-subsonic--json-to-listen
+;;           (infrasonic-search-tracks query)))
 
 (defun listen-subsonic-get-starred-tracks ()
   "Fetch all starred songs from the server.
@@ -288,7 +288,7 @@ ITEM must include element with `car' \"starred\"."
   "Fetch N random songs from the server.
 Returns a list of N `listen-track's."
   (mapcar #'listen-subsonic--json-to-listen
-          (infrasonic-get-random-tracks)))
+          (infrasonic-get-random-tracks n)))
 
 (defun listen-subsonic-queue-random (n queue)
   "Add N random songs to QUEUE."
@@ -317,13 +317,6 @@ Returns the selected playlist's ID as a string."
   (interactive (list (listen-queue-complete :allow-new-p t)))
   (listen-queue-add-tracks (listen-subsonic-get-starred-tracks)
                            queue))
-
-(defun listen-queue-add-from-subsonic ()
-  "Present a list of Subsonic sources, and add tracks from that source to a queue."
-  (interactive)
-  (let ((tracks (cdr (listen-subsonic-source)))
-        (queue (listen-queue-complete :allow-new-p t)))
-    (listen-queue-add-tracks tracks queue)))
 
 (defun listen-library-from-subsonic ()
   "Turn a list of `listen-track's into a `listen-library' view."
