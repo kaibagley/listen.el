@@ -1,4 +1,4 @@
-;;; listen-subsonic.el --- Subsonic server support for listen.el         -*- lexical-binding: t; -*-
+ ;;; listen-subsonic.el --- Subsonic server support for listen.el         -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2025  Free Software Foundation, Inc.
 
@@ -147,13 +147,12 @@ Only tracks with the source \"subsonic\" will be included."
       (user-error "No Subsonic tracks found"))))
 
 (defun listen-subsonic--scrobble (player status)
-  "Scrobble the current track playing in PLAYER's queue to the Subsonic API.
+  "Scrobble the STATUS of the current track playing in PLAYER's queue to
+the Subsonic API.
 Returns the unparsed API response.
 
 Only tracks with the source \"subsonic\" will be scrobbled.
-
-When STATUS is `:finished', server is notified that the currently playing track is finished.
-When STATUS is `:playing', server is notified the current tracks is \"now playing\"."
+STATUS may be either `:playing' or `:finished'."
   (when-let* ((queue (map-elt (listen-player-etc player) :queue))
               (track (listen-queue-current queue))
               (source (equal (map-elt (listen-track-etc track) 'source) "subsonic"))
@@ -172,34 +171,6 @@ Should be added to `listen-track-end-functions'."
 
 ;;;; Server browsing functions
 
-(defun listen-subsonic--get-nodes (level id)
-  "Fetch \"nodes\" for directory hierarchy LEVEL and ID.
-Returns a list of alists, each alist representing children of ID.
-Normalises artists, albums and tracks such that:
-- All three have the alist elements \"name\" and \"subsonic-type\".
-- Artists and albums have alist element \"isDir\".
-
-LEVEL determines the endpoint to use, and may be one of:
-- :artists: Returns top-level view of all artists using endpoint \"getArtists\".
-- :artist: Returns albums for an artist using \"getArtist\".
-- :album: Returns songs in an album using \"getAlbum\"."
-  (let ((items
-         (pcase level
-           (:artists (infrasonic-get-artists))
-           (:artist (infrasonic-get-artist id))
-           (:album (infrasonic-get-album id)))))
-    items))
-
-(defun listen-subsonic--browser-next-level (level)
-  "Determines the hierarchical level under LEVEL.
-Returns the keyword symbol for the next level.
-
-Hierarchy is: :artists -> :artist -> :album."
-  (pcase level
-    (:artists :artist)
-    (:artist :album)
-    (_ :album)))
-
 (defun listen-subsonic--dired-get-prefix (item)
   "Create a fixed-width string of `ls'-like metadata for ITEM.
 Returns a formatted string of length up to 15 characters.
@@ -208,7 +179,7 @@ Example returns:
 - Starred song: \"- * 2004  3:43\"
 - Artist:       \"d - ---- 53:19\"
 - Album:        \"d - 2004 --:--\""
-  (let* ((dirp (alist-get 'isDir item))
+  (let* ((dirp (not (eq (alist-get 'subsonic-type item) :track)))
          (year (alist-get 'year item))
          (duration (alist-get 'duration item))
          (starred (alist-get 'starred item)))
@@ -385,7 +356,7 @@ Returns a cons (source . list of `listen-track's)."
                    ("Find"
                     (listen-subsonic-find))
                    ("Playlist"
-                    (listen-subsonic--get-playlist-tracks (infrasonic-read-playlist)))
+                    (listen-subsonic--get-playlist-tracks (listen-subsonic--read-playlist)))
                    ("Search"
                     (let ((query (read-string "Search: ")))
                       (listen-subsonic-search-tracks query)))
@@ -414,8 +385,7 @@ Returns a cons (source . list of `listen-track's)."
 - Selecting an artist or album opens the `listen-subsonic-find' browsing functionality."
   (interactive (list (read-string "Search: ")))
   (let* ((items (infrasonic-search query))
-         (entries nil)
-         (queue ))
+         (entries nil))
 
     (unless items
       (user-error "No search results for '%s'" query))
@@ -519,8 +489,8 @@ Returns a list (function name) for the selected action, or nil to go up/back.
 
 LEVEL, ID, and NAME define the current location.
 HISTORY is a stack containing the user's navigation history."
-  (let* ((items (listen-subsonic--get-nodes level id))
-         (next (listen-subsonic--browser-next-level level))
+  (let* ((items (infrasonic-children id level))
+         (next (infrasonic-child level))
          (prompt (if (eq level :artists)
                      "Library: "
                    (let ((path (mapcar (lambda (h) (nth 2 h)) history)))
@@ -570,7 +540,7 @@ HISTORY is a stack containing the user's navigation history."
         (list (lambda () (listen-subsonic--get-all-tracks id level))
               (format "Subsonic: %s" name)))
        ;; Folder/artist/album
-       ((and (listp selection) (alist-get 'isDir selection))
+       ((not (eq (alist-get 'subsonic-type item) :track))
         (listen-subsonic--find-step next
                                     (alist-get 'id selection)
                                     (alist-get 'name selection)
@@ -708,7 +678,7 @@ Used as the callback function for asynchronous art downloads in
 Returns a list (art-id buffer pos) for asynchronous artwork downloads.
 
 NEXT determines the level the ITEM will link to."
-  (let* ((dirp (alist-get 'isDir item))
+  (let* ((dirp (not (eq (alist-get 'subsonic-type item) :track)))
          (name (alist-get 'name item))
          (prefix (listen-subsonic--dired-get-prefix item))
          (pt (point))
@@ -740,8 +710,8 @@ Inserts a header, navigation buttons and the list of items."
               listen-subsonic--dired-current-name name
               listen-subsonic--dired-current-level level)
   (let* ((inhibit-read-only t)
-         (items (listen-subsonic--get-nodes level id))
-         (next (listen-subsonic--browser-next-level level)))
+         (items (infrasonic-children id level))
+         (next (infrasonic-child level)))
 
     ;; prepare buffer
     (erase-buffer)
@@ -762,8 +732,8 @@ Inserts a header, navigation buttons and the list of items."
                           'follow-link t
                           'face 'dired-directory)
       (insert "\n"))
-    (let ((next (listen-subsonic--browser-next-level level)))
-      (dolist (item (listen-subsonic--get-nodes level id))
+    (let ((next (infrasonic-child level)))
+      (dolist (item items)
         (pcase-let ((`(,art-id ,buf ,pos)
                      (listen-subsonic--dired-insert-item item next)))
           (when (and art-id (not (eq level :artists)))
@@ -801,7 +771,7 @@ If button at point is a track, add it to the current queue."
     (unless item (user-error "No item on this line"))
 
     ;; open directory
-    (if (alist-get 'isDir item)
+    (if (not (eq (alist-get 'subsonic-type item) :track))
         (progn
           ;; add current state to history
           (push (list listen-subsonic--dired-current-id
