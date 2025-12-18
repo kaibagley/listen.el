@@ -515,8 +515,6 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
     ("qap" "from playlist file" listen-queue-add-from-playlist-file
      :transient t)]
    ["Subsonic"
-    ("qvs" "from Subsonic" listen-queue-add-from-subsonic
-     :transient t)
     ("qva" "queue starred" listen-subsonic-queue-starred-tracks
      :transient t)]])
 
