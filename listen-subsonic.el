@@ -26,10 +26,8 @@
 
 ;;;; Requirements
 
-;; TODO: Move api calls to infrasonic
 ;; TODO: Some kind of indicator to show if track is starred or not
 ;; TODO: Send bookmark request to server periodically
-;; TODO: When emacs 31.1 is released, cl-decf/cl-incf -> decf/incf
 
 (require 'infrasonic)   ; For Subsonic backend
 (require 'listen-queue) ; Add tracks to queue
