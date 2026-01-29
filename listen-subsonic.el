@@ -1,4 +1,4 @@
- ;;; listen-subsonic.el --- Subsonic server support for listen.el         -*- lexical-binding: t; -*-
+;;; listen-subsonic.el --- Subsonic server support for listen.el         -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2025  Free Software Foundation, Inc.
 
@@ -33,15 +33,62 @@
 (require 'listen-queue) ; Add tracks to queue
 (require 'svg-lib)      ; For starred icon
 
+(require 'subr-x)       ; string-empty-p
+(require 'map)          ; map-let/elt
+(require 'cl-lib)       ; cl-incf
+
 ;; Declares
 
 (declare-function listen-library "listen-library")
+
+(declare-function listen-subsonic--build-client "listen-subsonic")
+(declare-function listen-subsonic--custom-set "listen-subsonic")
 
 ;;;; Customisation
 
 (defgroup listen-subsonic nil
   "`listen' options for Subsonic backend."
   :group 'listen)
+
+(defcustom listen-subsonic-url nil
+  "The fully-qualified domain name of your Subsonic-compatible server.
+For example, \"music.example.com\" or \"192.168.0.0:4533\".
+Don't include the procol/scheme or the resource path."
+  :type 'string
+  :group 'listen-subsonic
+  :set #'listen-subsonic--custom-set)
+
+(defcustom listen-subsonic-protocol "https"
+  "Protocol to use for calls to Subsonic API.
+Must be either \"http\" or \"https\" (default)."
+  :type '(choice (const :tag "HTTPS" "https")
+                 (const :tag "HTTP" "http"))
+  :group 'listen-subsonic
+  :set #'listen-subsonic--custom-set)
+
+(defcustom listen-subsonic-api-version "1.16.1"
+  "OpenSubsonic API version string to advertise (e.g. \"1.16.1\")."
+  :type 'string
+  :group 'listen-subsonic
+  :set #'listen-subsonic--custom-set)
+
+(defcustom listen-subsonic-timeout 300
+  "Request timeout in seconds passed to `plz'."
+  :type 'integer
+  :group 'listen-subsonic
+  :set #'listen-subsonic--custom-set)
+
+(defcustom listen-subsonic-queue-limit 5
+  "Max concurrent downloads for `infrasonic''s `plz' queue."
+  :type 'integer
+  :group 'listen-subsonic
+  :set #'listen-subsonic--custom-set)
+
+(defcustom listen-subsonic-search-max-results 200
+  "Maximum number of results returned by search queries."
+  :type 'integer
+  :group 'listen-subsonic
+  :set #'listen-subsonic--custom-set)
 
 ;; Users set infrasonic variables for URL, protocol, etc.
 
@@ -50,50 +97,67 @@
   "Face for starred Subsonic tracks."
   :group 'listen-subsonic)
 
+(defvar listen-subsonic--client nil
+  "Current `infrasonic' client.")
+
 (defvar listen-subsonic-cache-dir (expand-file-name "listen.el" temporary-file-directory)
   "Directory to store cached files such as cover art.")
-
-(defvar listen-subsonic--art-queue nil
-  "Queue for art downloads in browser.
-Each element is a list: (url filename buffer position).
-url is the URL of the art to download.
-filename is the file to write to.
-buffer and position specify where to display the art when downloaded.")
-
-(defvar listen-subsonic--art-active 0
-  "Number of concurrent active downloads associated with `listen-subsonic--art-queue'.
-Used to keep concurrent downloads below `listen-subsonic--art-max'.")
-
-(defvar listen-subsonic--art-max 10
-  "Max allowed concurrent downloads.
-Used to limit connections to the server.")
 
 (defvar listen-subsonic--menu-max-width 50
   "Maximum width of strings returned by search function.")
 
 ;;;; General helpers
 
-(defun listen-subsonic--json-to-listen (json-data)
+(defun listen-subsonic--custom-set (symbol value)
+  "Rebuild the `infrasonic' client with SYMBOL set to VALUE."
+  (set-default symbol value)
+  (listen-subsonic--build-client))
+
+(defun listen-subsonic--client ()
+  "Return the current `infrasonic' client, or build a new one and return that."
+  (or listen-subsonic--client
+      (progn
+        (listen-subsonic--build-client)
+        (or listen-subsonic--client
+            (user-error "Please set `listen-subsonic-url'.")))))
+
+(defun listen-subsonic--build-client ()
+  "Build or rebuild our `listen-subsonic--client' from `listen' user options."
+  (setq listen-subsonic--client
+        (when (and (stringp listen-subsonic-url)
+                   (not (string-empty-p listen-subsonic-url)))
+          (infrasonic-make-client
+           :url listen-subsonic-url
+           :protocol listen-subsonic-protocol
+           :user-agent "listen.el"
+           :api-version listen-subsonic-api-version
+           :queue-limit listen-subsonic-queue-limit
+           :timeout listen-subsonic-timeout
+           :art-size 128
+           :search-max-results listen-subsonic-search-max-results))))
+
+(defun listen-subsonic--json-to-listen (json-data &optional client)
   "Convert an `infrasonic' JSON-DATA into a `listen-track'.
 Returns a `listen-track' struct."
-  (map-let
-      (('id id) ('userRating rating) artist title album track genre duration year starred)
-      json-data
-    (make-listen-track
-     :filename (infrasonic-get-stream-url id) ; silly mpv
-     :artist artist
-     :title title
-     :album album
-     :number (number-to-string (or track 0))
-     :genre genre
-     :duration (or duration 0)
-     :date year
-     ;; Rating is a string, "0.0" - "1.0". Subsonic returns 0-5 or nil
-     :rating (when rating (format "%f" (/ rating 5.0)))
-     :metadata json-data
-     :etc `((source . "subsonic")
-            (id . ,id)
-            (starred . ,(when starred t))))))
+  (let ((client (or client (listen-subsonic--client))))
+    (map-let
+        (('id id) ('userRating rating) artist title album track genre duration year starred)
+        json-data
+      (make-listen-track
+       :filename (infrasonic-get-stream-url client id) ; silly mpv
+       :artist artist
+       :title title
+       :album album
+       :number (number-to-string (or track 0))
+       :genre genre
+       :duration (or duration 0)
+       :date year
+       ;; Rating is a string, "0.0" - "1.0". Subsonic returns 0-5 or nil
+       :rating (when rating (format "%f" (/ rating 5.0)))
+       :metadata json-data
+       :etc `((source . "subsonic")
+              (id . ,id)
+              (starred . ,(when starred t)))))))
 
 ;;;; Read requests
 
@@ -107,13 +171,13 @@ Returns a `listen-track' struct."
   "Fetch all starred songs from the server.
 Returns a list of `listen-track's."
   (mapcar #'listen-subsonic--json-to-listen
-          (infrasonic-get-starred-tracks)))
+          (infrasonic-get-starred-tracks (listen-subsonic--client))))
 
 (defun listen-subsonic--get-playlist-tracks (id)
   "Fetch all tracks in playlist with ID.
 Returns a list of `listen-track's."
   (mapcar #'listen-subsonic--json-to-listen
-          (infrasonic-get-playlist-tracks id)))
+          (infrasonic-get-playlist-tracks (listen-subsonic--client) id)))
 
 (defun listen-subsonic--get-all-tracks (id level)
   "Fetch all tracks under item associated with ID.
@@ -123,7 +187,7 @@ LEVEL determines what level of the hierarchy we are on:
 - :artist: fetches all albums, then all songs by that artist.
 - :album: fetches all songs on the album."
   (mapcar #'listen-subsonic--json-to-listen
-          (infrasonic-get-all-tracks id level)))
+          (infrasonic-get-all-tracks (listen-subsonic--client) id level)))
 
 ;;;; Write requests
 
@@ -141,7 +205,7 @@ Only tracks with the source \"subsonic\" will be included."
                            (list (alist-get 'id etc)))))
                      (listen-queue-tracks queue))))
     (if ids
-        (infrasonic-create-playlist ids name)
+        (infrasonic-create-playlist (listen-subsonic--client) ids name)
       (user-error "No Subsonic tracks found"))))
 
 (defun listen-subsonic--scrobble (player status)
@@ -155,7 +219,7 @@ STATUS may be either `:playing' or `:finished'."
               (track (listen-queue-current queue))
               (source (equal (map-elt (listen-track-etc track) 'source) "subsonic"))
               (id (alist-get 'id (listen-track-etc track))))
-    (infrasonic-scrobble id status)))
+    (infrasonic-scrobble (listen-subsonic--client) id status)))
 
 (defun listen-subsonic-scrobble-start (player)
   "Notifies the server that we have started playing a track in PLAYER.
@@ -184,7 +248,8 @@ This function also sets TRACK's in-memory star status accordingly."
        (user-error "No track playing."))
      (list track (not (alist-get 'starred (listen-track-etc track))))))
   (when-let* ((id (alist-get 'id (listen-track-etc track))))
-    (infrasonic-star id star-p
+    (infrasonic-star (listen-subsonic--client)
+                     id star-p
                      ;; update track in-memory
                      (lambda (_)
                        (setf (alist-get 'starred (listen-track-etc track)) star-p)
@@ -286,7 +351,7 @@ ITEM must include element with `car' \"starred\"."
   "Fetch N random songs from the server.
 Returns a list of N `listen-track's."
   (mapcar #'listen-subsonic--json-to-listen
-          (infrasonic-get-random-tracks n)))
+          (infrasonic-get-random-songs (listen-subsonic--client) n)))
 
 (defun listen-subsonic-queue-random (n queue)
   "Add N random songs to QUEUE."
@@ -299,7 +364,7 @@ Returns a list of N `listen-track's."
 (defun listen-subsonic--read-playlist ()
   "Prompt user to select a Subsonic playlist using `completing-read'.
 Returns the selected playlist's ID as a string."
-  (let* ((playlists (infrasonic-get-playlists))
+  (let* ((playlists (infrasonic-get-playlists (listen-subsonic--client)))
          (name (completing-read "Playlist: " playlists nil t)))
     (alist-get name playlists nil nil #'equal)))
 
@@ -330,7 +395,7 @@ Returns the selected playlist's ID as a string."
 - Selecting a track adds it to the queue.
 - Selecting an artist or album opens the `listen-subsonic-find' browsing functionality."
   (interactive (list (read-string "Search: ")))
-  (let* ((items (infrasonic-search query))
+  (let* ((items (infrasonic-search (listen-subsonic--client) query))
          (entries nil))
 
     (unless items
@@ -406,4 +471,5 @@ Returns the selected playlist's ID as a string."
              (message "Added '%s' to the queue." (listen-track-title track)))))))))
 
 (provide 'listen-subsonic)
+
 ;;; listen-subsonic.el ends here
