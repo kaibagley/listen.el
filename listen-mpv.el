@@ -236,7 +236,11 @@ Stops playing, clears playlist, adds FILE, and plays it."
             (+ (time-to-seconds
                 (time-subtract (current-time)
                                (or (listen-player-playback-started-at player) 0)))
-               (or (listen-player-playback-started-from player) 0)))
+               (or (listen-player-playback-started-from player)
+                   ;; Avoid race condition: the playback-started-from slot is nil, so assume it
+                   ;; should be 0 but hasn't been set yet (if it turns out to be incorrect, it will
+                   ;; only cause the value returned by this function to be briefly incorrect).
+                   0)))
     (or (map-elt (listen-player-etc player) :elapsed) 0)))
 
 (cl-defmethod listen--length ((player listen-player-mpv))
