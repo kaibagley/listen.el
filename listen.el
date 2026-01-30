@@ -287,13 +287,13 @@ According to `listen-lighter-format', which see."
                                  'face 'listen-lighter-title)
                               "")))
                    (?e . ,(lambda ()
-                            (propertize (listen-format-seconds (listen--elapsed listen-player))
+                            (propertize (listen-format-seconds (or (listen--elapsed listen-player) 0))
                                         'face 'listen-lighter-time)))
                    (?r . ,(lambda ()
-                            (propertize (concat "-" (listen-format-seconds
-                                                     (- (listen--length listen-player)
-                                                        (listen--elapsed listen-player))))
-                                        'face 'listen-lighter-time)))
+                            (let ((elapsed (or (listen--elapsed listen-player) 0))
+                                  (length (or (listen--length listen-player) 0)))
+                              (propertize (concat "-" (listen-format-seconds (- length elapsed)))
+                                          'face 'listen-lighter-time))))
                    (?m . ,(nth 0 listen-lighter-symbols-list))
                    (?s . ,(lambda ()
                             (propertize (pcase (listen--status listen-player)
@@ -323,18 +323,21 @@ According to `listen-lighter-format', which see."
   (declare-function listen-queue-play "listen-queue")
   (declare-function listen-queue-next-track "listen-queue")
   (when (and listen-player (listen--running-p listen-player))
-    (unless (or (listen--playing-p listen-player)
-                ;; HACK: It seems that sometimes the player gets restarted
-                ;; even when paused: this extra check should prevent that.
-                (member (listen--status listen-player) '(playing paused)))
-      (run-hook-with-args 'listen-track-end-functions listen-player)))
+    ;; Only attempt to play next track if the current track has an actual duration This prevents
+    ;; issues with Subsonic streams where MPV hasn't yet received the duration, which sometimes
+    ;; causes song skipping and Emacs blockage
+    (let ((duration (listen-player-duration listen-player)))
+      (unless (or (listen--playing-p listen-player)
+                  ;; HACK: It seems that sometimes the player gets restarted even when paused: this
+                  ;; extra check should prevent that.
+                  (member (listen--status listen-player) '(playing paused)))
+        (when (and duration (> duration 0))
+          (run-hook-with-args 'listen-track-end-functions listen-player)))))
   (setf listen-mode-lighter
         (when (and listen-player (listen--running-p listen-player))
           (listen-mode-lighter)))
   (force-mode-line-update 'all))
 
-;; TODO: (at least) with Navidrome, there is a gap between playback currently, and thus the lighter
-;; will vanish and reappear in between songs.
 (defun listen-play-next (player)
   "Play PLAYER's queue's next track and return non-nil if playing."
   (when-let ((queue (map-elt (listen-player-etc player) :queue)))
@@ -565,10 +568,10 @@ If DISPLAYP, show the buffer; otherwise just update existing one."
                     (propertize (metadata "album" track)
                                 'face 'listen-album
                                 'wrap-prefix "        ") "\n")
-            (insert (with-face "  Time: " 'bold) (listen-format-seconds (listen--elapsed player))
-                    " / " (listen-format-seconds (listen-track-duration track))
-                    " (-" (listen-format-seconds (- (listen-track-duration track)
-                                                    (listen--elapsed player))) ")" "\n")
+             (insert (with-face "  Time: " 'bold) (listen-format-seconds (or (listen--elapsed player) 0))
+                     " / " (listen-format-seconds (or (listen-track-duration track) 0))
+                     " (-" (listen-format-seconds (- (or (listen-track-duration track) 0)
+                                                    (or (listen--elapsed player) 0))) ")" "\n")
             (insert (with-face "  File: " 'bold)
                     (propertize (listen-track-filename track)
                                 'face 'listen-filename

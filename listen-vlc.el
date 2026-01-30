@@ -89,7 +89,8 @@
   "Play FILE with PLAYER.
 Stops playing, clears playlist, adds FILE, and plays it."
     (dolist (command `("stop" "clear" ,(format "add %s" file) "play"))
-      (listen--send player command)))
+      (listen--send player command))
+    (setf (listen-player-status player) 'playing))
 
 ;; (cl-defmethod listen--stop ((player listen-player-vlc))
 ;;   "Stop playing with PLAYER."

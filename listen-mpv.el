@@ -200,6 +200,7 @@ Stops playing, clears playlist, adds FILE, and plays it."
   (let ((path (if (string-prefix-p "http" file)
                   file
                 (expand-file-name file))))
+    (listen--status-is player 'stopped)
     (listen--send* player `("loadfile" ,path) :then #'ignore)))
 
 ;; (cl-defmethod listen--stop ((player listen-player-mpv))
@@ -235,12 +236,12 @@ Stops playing, clears playlist, adds FILE, and plays it."
             (+ (time-to-seconds
                 (time-subtract (current-time)
                                (or (listen-player-playback-started-at player) 0)))
-               (listen-player-playback-started-from player)))
-    (map-elt (listen-player-etc player) :elapsed)))
+               (or (listen-player-playback-started-from player) 0)))
+    (or (map-elt (listen-player-etc player) :elapsed) 0)))
 
 (cl-defmethod listen--length ((player listen-player-mpv))
   "Return length of PLAYER's track in seconds."
-  (listen-player-duration player))
+  (or (listen-player-duration player) 0))
 
 (cl-defmethod listen--send ((player listen-player-mpv) command &rest args)
   "Not implemented for MPV; use `listen--send*'.
