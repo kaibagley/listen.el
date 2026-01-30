@@ -41,15 +41,36 @@
 
 (declare-function listen-library "listen-library")
 
-(declare-function listen-subsonic--build-client "listen-subsonic")
-(declare-function listen-subsonic--custom-set "listen-subsonic")
-
 ;;;; Customisation
 
+;;;###autoload
+(defun listen-subsonic--build-client ()
+  "Build or rebuild our `listen-subsonic--client' from `listen' user options."
+  (setq listen-subsonic--client
+        (when (and (stringp listen-subsonic-url)
+                   (not (string-empty-p listen-subsonic-url)))
+          (infrasonic-make-client
+           :url listen-subsonic-url
+           :protocol listen-subsonic-protocol
+           :user-agent "listen.el"
+           :api-version listen-subsonic-api-version
+           :queue-limit listen-subsonic-queue-limit
+           :timeout listen-subsonic-timeout
+           :art-size 128
+           :search-max-results listen-subsonic-search-max-results))))
+
+;;;###autoload
+(defun listen-subsonic--custom-set (symbol value)
+  "Rebuild the `infrasonic' client with SYMBOL set to VALUE."
+  (set-default symbol value)
+  (listen-subsonic--build-client))
+
+;;;###autoload
 (defgroup listen-subsonic nil
   "`listen' options for Subsonic backend."
   :group 'listen)
 
+;;;###autoload
 (defcustom listen-subsonic-url nil
   "The fully-qualified domain name of your Subsonic-compatible server.
 For example, \"music.example.com\" or \"192.168.0.0:4533\".
@@ -58,6 +79,7 @@ Don't include the procol/scheme or the resource path."
   :group 'listen-subsonic
   :set #'listen-subsonic--custom-set)
 
+;;;###autoload
 (defcustom listen-subsonic-protocol "https"
   "Protocol to use for calls to Subsonic API.
 Must be either \"http\" or \"https\" (default)."
@@ -66,24 +88,28 @@ Must be either \"http\" or \"https\" (default)."
   :group 'listen-subsonic
   :set #'listen-subsonic--custom-set)
 
+;;;###autoload
 (defcustom listen-subsonic-api-version "1.16.1"
   "OpenSubsonic API version string to advertise (e.g. \"1.16.1\")."
   :type 'string
   :group 'listen-subsonic
   :set #'listen-subsonic--custom-set)
 
+;;;###autoload
 (defcustom listen-subsonic-timeout 300
   "Request timeout in seconds passed to `plz'."
   :type 'integer
   :group 'listen-subsonic
   :set #'listen-subsonic--custom-set)
 
+;;;###autoload
 (defcustom listen-subsonic-queue-limit 5
   "Max concurrent downloads for `infrasonic''s `plz' queue."
   :type 'integer
   :group 'listen-subsonic
   :set #'listen-subsonic--custom-set)
 
+;;;###autoload
 (defcustom listen-subsonic-search-max-results 200
   "Maximum number of results returned by search queries."
   :type 'integer
@@ -108,11 +134,6 @@ Must be either \"http\" or \"https\" (default)."
 
 ;;;; General helpers
 
-(defun listen-subsonic--custom-set (symbol value)
-  "Rebuild the `infrasonic' client with SYMBOL set to VALUE."
-  (set-default symbol value)
-  (listen-subsonic--build-client))
-
 (defun listen-subsonic--client ()
   "Return the current `infrasonic' client, or build a new one and return that."
   (or listen-subsonic--client
@@ -120,21 +141,6 @@ Must be either \"http\" or \"https\" (default)."
         (listen-subsonic--build-client)
         (or listen-subsonic--client
             (user-error "Please set `listen-subsonic-url'.")))))
-
-(defun listen-subsonic--build-client ()
-  "Build or rebuild our `listen-subsonic--client' from `listen' user options."
-  (setq listen-subsonic--client
-        (when (and (stringp listen-subsonic-url)
-                   (not (string-empty-p listen-subsonic-url)))
-          (infrasonic-make-client
-           :url listen-subsonic-url
-           :protocol listen-subsonic-protocol
-           :user-agent "listen.el"
-           :api-version listen-subsonic-api-version
-           :queue-limit listen-subsonic-queue-limit
-           :timeout listen-subsonic-timeout
-           :art-size 128
-           :search-max-results listen-subsonic-search-max-results))))
 
 (defun listen-subsonic--json-to-listen (json-data &optional client)
   "Convert an `infrasonic' JSON-DATA into a `listen-track'.
@@ -171,13 +177,13 @@ Returns a `listen-track' struct."
   "Fetch all starred songs from the server.
 Returns a list of `listen-track's."
   (mapcar #'listen-subsonic--json-to-listen
-          (infrasonic-get-starred-tracks (listen-subsonic--client))))
+          (infrasonic-get-starred-songs (listen-subsonic--client))))
 
 (defun listen-subsonic--get-playlist-tracks (id)
   "Fetch all tracks in playlist with ID.
 Returns a list of `listen-track's."
   (mapcar #'listen-subsonic--json-to-listen
-          (infrasonic-get-playlist-tracks (listen-subsonic--client) id)))
+          (infrasonic-get-playlist-songs (listen-subsonic--client) id)))
 
 (defun listen-subsonic--get-all-tracks (id level)
   "Fetch all tracks under item associated with ID.
@@ -187,7 +193,7 @@ LEVEL determines what level of the hierarchy we are on:
 - :artist: fetches all albums, then all songs by that artist.
 - :album: fetches all songs on the album."
   (mapcar #'listen-subsonic--json-to-listen
-          (infrasonic-get-all-tracks (listen-subsonic--client) id level)))
+          (infrasonic-get-all-songs (listen-subsonic--client) id level)))
 
 ;;;; Write requests
 
@@ -381,94 +387,96 @@ Returns the selected playlist's ID as a string."
   (listen-queue-add-tracks (listen-subsonic-get-starred-tracks)
                            queue))
 
-(defun listen-library-from-subsonic ()
-  "Turn a list of `listen-track's into a `listen-library' view."
-  (interactive)
-  (let* ((src (listen-subsonic-source)))
-    (listen-library (cdr src)
-                    :name (format "Subsonic: %s" (car src)))))
+;; TODO: Do this
+;; (defun listen-library-from-subsonic ()
+;;   "Turn a list of `listen-track's into a `listen-library' view."
+;;   (interactive)
+;;   (let* ((src (listen-subsonic-source)))
+;;     (listen-library (cdr src)
+;;                     :name (format "Subsonic: %s" (car src)))))
 
 ;; TODO: Truncate search results before it hits affixation
-(defun listen-subsonic-search (query)
-  "Search the server for QUERY, and display artists, albums and tracks.
+;; TODO: Complete this implementation (maybe)
+;; (defun listen-subsonic-search (query)
+;;   "Search the server for QUERY, and display artists, albums and tracks.
 
-- Selecting a track adds it to the queue.
-- Selecting an artist or album opens the `listen-subsonic-find' browsing functionality."
-  (interactive (list (read-string "Search: ")))
-  (let* ((items (infrasonic-search (listen-subsonic--client) query))
-         (entries nil))
+;; - Selecting a track adds it to the queue.
+;; - Selecting an artist or album opens the `listen-subsonic-find' browsing functionality."
+;;   (interactive (list (read-string "Search: ")))
+;;   (let* ((items (infrasonic-search (listen-subsonic--client) query))
+;;          (entries nil))
 
-    (unless items
-      (user-error "No search results for '%s'" query))
+;;     (unless items
+;;       (user-error "No search results for '%s'" query))
 
-    ;; Build entries with unique display names.
-    (dolist (item items)
-      (let* ((type (alist-get 'subsonic-type item))
-             (face (pcase type
-                     (:artist 'listen-artist)
-                     (:album 'listen-album)
-                     (:track 'listen-title)))
-             (name (propertize
-                    (truncate-string-to-width
-                     ;; Ensure that tracks have a name elem
-                     (alist-get 'name item)
-                     (- listen-subsonic--menu-max-width 5) 0 nil t)
-                    'face face))
-             (disp-name name)
-             (count 1))
-        (while (assoc disp-name entries #'equal)
-          (cl-incf count)
-          (setq disp-name (format "%s %s"
-                                  name
-                                  (propertize (format "(%d)" count)
-                                              'face 'shadow))))
-        (push (cons disp-name item) entries)))
-    (setq entries (nreverse entries))
+;;     ;; Build entries with unique display names.
+;;     (dolist (item items)
+;;       (let* ((type (alist-get 'subsonic-type item))
+;;              (face (pcase type
+;;                      (:artist 'listen-artist)
+;;                      (:album 'listen-album)
+;;                      (:track 'listen-title)))
+;;              (name (propertize
+;;                     (truncate-string-to-width
+;;                      ;; Ensure that tracks have a name elem
+;;                      (alist-get 'name item)
+;;                      (- listen-subsonic--menu-max-width 5) 0 nil t)
+;;                     'face face))
+;;              (disp-name name)
+;;              (count 1))
+;;         (while (assoc disp-name entries #'equal)
+;;           (cl-incf count)
+;;           (setq disp-name (format "%s %s"
+;;                                   name
+;;                                   (propertize (format "(%d)" count)
+;;                                               'face 'shadow))))
+;;         (push (cons disp-name item) entries)))
+;;     (setq entries (nreverse entries))
 
-    (let* ((affix-fn (listen-subsonic--affixation
-                      entries
-                      #'listen-subsonic--item-suffix nil
-                      #'listen-subsonic--item-prefix nil))
-           ;; convert keyword to string for group function
-           (group-fn (lambda (cand transform)
-                       (if transform
-                           cand
-                         (let ((type (alist-get 'subsonic-type (alist-get cand entries nil nil #'equal))))
-                           (pcase type
-                             (:artist "Artists")
-                             (:album "Albums")
-                             (:track "Songs"))))))
-           (selected
-            (listen-subsonic--completing-read
-             "Select: " entries
-             `((affixation-function . ,affix-fn)
-               (group-function . ,group-fn)))))
+;;     (let* ((affix-fn (listen-subsonic--affixation
+;;                       entries
+;;                       #'listen-subsonic--item-suffix nil
+;;                       #'listen-subsonic--item-prefix nil))
+;;            ;; convert keyword to string for group function
+;;            (group-fn (lambda (cand transform)
+;;                        (if transform
+;;                            cand
+;;                          (let ((type (alist-get 'subsonic-type (alist-get cand entries nil nil #'equal))))
+;;                            (pcase type
+;;                              (:artist "Artists")
+;;                              (:album "Albums")
+;;                              (:track "Songs"))))))
+;;            (selected
+;;             (listen-subsonic--completing-read
+;;              "Select: " entries
+;;              `((affixation-function . ,affix-fn)
+;;                (group-function . ,group-fn)))))
 
-      (let ((type (alist-get 'subsonic-type selected)))
-        (pcase type
-          (:artist
-           (when-let* ((name (alist-get 'name selected))
-                       (result (listen-subsonic--find-step
-                                :artist
-                                (alist-get 'id selected)
-                                name))
-                       (tracks (funcall (nth 0 result))))
-             (listen-queue-add-tracks tracks (listen-queue-complete :allow-new-p t))
-             (message "Added %d tracks from '%s'." (length tracks) name)))
-          (:album
-           (when-let* ((name (alist-get 'name selected))
-                       (result (listen-subsonic--find-step
-                                :album
-                                (alist-get 'id selected)
-                                name))
-                       (tracks (funcall (nth 0 result))))
-             (listen-queue-add-tracks tracks (listen-queue-complete :allow-new-p t))
-             (message "Added %d tracks from '%s'." (length tracks) name)))
-          (:track
-           ;; add a track to the queue
-           (let ((track (listen-subsonic--json-to-listen selected)))
-             (listen-queue-add-tracks (list track) (listen-queue-complete :allow-new-p t))
-             (message "Added '%s' to the queue." (listen-track-title track)))))))))
+;;       (let ((type (alist-get 'subsonic-type selected)))
+;;         (pcase type
+;;           (:artist
+;;            (when-let* ((name (alist-get 'name selected))
+;;                        (result (listen-subsonic--find-step
+;;                                 :artist
+;;                                 (alist-get 'id selected)
+;;                                 name))
+;;                        (tracks (funcall (nth 0 result))))
+;;              (listen-queue-add-tracks tracks (listen-queue-complete :allow-new-p t))
+;;              (message "Added %d tracks from '%s'." (length tracks) name)))
+;;           (:album
+;;            (when-let* ((name (alist-get 'name selected))
+;;                        (result (listen-subsonic--find-step
+;;                                 :album
+;;                                 (alist-get 'id selected)
+;;                                 name))
+;;                        (tracks (funcall (nth 0 result))))
+;;              (listen-queue-add-tracks tracks (listen-queue-complete :allow-new-p t))
+;;              (message "Added %d tracks from '%s'." (length tracks) name)))
+;;           (:track
+;;            ;; add a track to the queue
+;;            (let ((track (listen-subsonic--json-to-listen selected)))
+;;              (listen-queue-add-tracks (list track) (listen-queue-complete :allow-new-p t))
+;;              (message "Added '%s' to the queue." (listen-track-title track)))))))))
 
 (provide 'listen-subsonic)
 
