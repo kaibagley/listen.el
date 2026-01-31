@@ -470,8 +470,9 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
     ("lq" "from queue" listen-library-from-queue)
     ("lp" "from playlist file" listen-library-from-playlist-file)]
    [""
-    ("ls" "from Subsonic" listen-subsonic-library)
-    ("lm" "from MPD" listen-library-from-mpd)]]
+     ("ls" "from Subsonic" listen-subsonic-library
+      :inapt-if (lambda () (not listen-subsonic-url)))
+     ("lm" "from MPD" listen-library-from-mpd)]]
 
   [["Queue mode"
     :description
@@ -498,7 +499,6 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
     ("qD" "Discard" listen-queue-discard
      :transient t)]
    ["Tracks"
-    ;; TODO: Grey-out when using Subsonic
     ("qj" "Jump to current in Dired" listen-jump)
     ("qt" "Play track" (lambda ()
                          "Call `listen-queue-play' with prefix."
@@ -517,9 +517,9 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
      :transient t)
     ("qap" "from playlist file" listen-queue-add-from-playlist-file
      :transient t)]
-   ;; TODO: Grey-out when listen-subsonic-url is not set
-    ["Subsonic"
-     ("qs" "from Subsonic" listen-subsonic-queue-menu)]])
+   ["Subsonic"
+    ("qv" "from Subsonic" listen-subsonic-queue-menu
+     :inapt-if (lambda () (not listen-subsonic-url)))]])
 
 ;; NOTE: This alias must come after the command it refers to, otherwise the autoload file fails to
 ;; finish loading (without warning), which breaks a lot of things!
