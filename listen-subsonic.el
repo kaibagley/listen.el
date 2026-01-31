@@ -353,11 +353,31 @@ ITEM must include element with `car' \"starred\"."
   "Returns PLAYLIST's song count to be used as an `affixation-function' suffix."
   (concat (number-to-string (or (alist-get 'songCount playlist) 0)) " tracks"))
 
+(defun listen-subsonic--read-playlist ()
+  "Prompt user to select a Subsonic playlist using `completing-read'.
+Returns the selected playlist's ID as a string."
+  (let* ((playlists (infrasonic-get-playlists (listen-subsonic--client)))
+         (name (completing-read "Playlist: " playlists nil t)))
+    (alist-get name playlists nil nil #'equal)))
+
+(defun listen-subsonic--read-album (albums &optional prompt)
+  "Prompt user to select a Subsonic album using `completing-read'.
+Returns the selected album's ID as a string."
+  (let* ((prompt (or prompt "Album: "))
+         (entries (mapcar (lambda (album)
+                            (cons (or (alist-get 'name album) "[unknown album]")
+                                  album))
+                          albums))
+         (names (mapcar #'car entries)))
+    (listen-subsonic--completing-read prompt entries)))
+
 (defun listen-subsonic-get-random-tracks (n)
   "Fetch N random songs from the server.
 Returns a list of N `listen-track's."
   (mapcar #'listen-subsonic--json-to-listen
           (infrasonic-get-random-songs (listen-subsonic--client) n)))
+
+;;;; Add to queue functions
 
 (defun listen-subsonic-queue-random (n queue)
   "Add N random songs to QUEUE."
@@ -366,13 +386,6 @@ Returns a list of N `listen-track's."
     (read-number "Number of songs: " 10)
     (listen-queue-complete :allow-new-p t)))
   (listen-queue-add-tracks (listen-subsonic-get-random-tracks n) queue))
-
-(defun listen-subsonic--read-playlist ()
-  "Prompt user to select a Subsonic playlist using `completing-read'.
-Returns the selected playlist's ID as a string."
-  (let* ((playlists (infrasonic-get-playlists (listen-subsonic--client)))
-         (name (completing-read "Playlist: " playlists nil t)))
-    (alist-get name playlists nil nil #'equal)))
 
 (defun listen-subsonic-queue-playlist (queue)
   "Prompt for a playlist and add its tracks to QUEUE."
@@ -386,6 +399,47 @@ Returns the selected playlist's ID as a string."
   (interactive (list (listen-queue-complete :allow-new-p t)))
   (listen-queue-add-tracks (listen-subsonic-get-starred-tracks)
                            queue))
+
+;; Queue from a list of albums
+
+(defun listen-subsonic--queue-album-from-list (queue type &optional prompt)
+  "Add an album from TYPE list to QUEUE.
+
+TYPE is passed to `infrasonic-get-album-list', and may be:
+- A genre string, for example: \"Rock\".
+- `:random': Random albums.
+- `:newest': Newest albums by release date.
+- `:frequent': User's most frequently played albums.
+- `:recent': Recently added albums.
+- `:starred': Starred albums.
+- `:byname': Alphabetically sorted by name.
+- `:byartist': Alphabetically sorted by artist."
+  (let* ((type (or type (error "Type must be non-nil")))
+         (client (listen-subsonic--client))
+         (albums (infrasonic-get-album-list client type))
+         (album (listen-subsonic--read-album albums prompt))
+         (tracks (listen-subsonic--get-all-tracks (alist-get 'id album) :album)))
+    (listen-queue-add-tracks tracks queue)))
+
+(defun listen-subsonic-queue-recent-release (queue)
+  "Add a recently released album to QUEUE."
+  (interactive (list (listen-queue-complete :allow-new-p t)))
+  (listen-subsonic--queue-album-from-list queue :newest "Recently released albums: "))
+
+(defun listen-subsonic-queue-most-played (queue)
+  "Add a frequently played album to QUEUE."
+  (interactive (list (listen-queue-complete :allow-new-p t)))
+  (listen-subsonic--queue-album-from-list queue :frequent "Frequently played albums: "))
+
+(defun listen-subsonic-queue-recent-addition (queue)
+  "Add a recently added-to-server album to QUEUE."
+  (interactive (list (listen-queue-complete :allow-new-p t)))
+  (listen-subsonic--queue-album-from-list queue :recent "Recently added albums: "))
+
+(defun listen-subsonic-queue-starred-album (queue)
+  "Add a starred album to QUEUE."
+  (interactive (list (listen-queue-complete :allow-new-p t)))
+  (listen-subsonic--queue-album-from-list queue :starred "Starred albums: "))
 
 ;;;; Library view
 ;; This is annoying for a few reasons. If a library is massive, it may take minutes to generate a
