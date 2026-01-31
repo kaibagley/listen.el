@@ -328,7 +328,7 @@ ITEM must include element with `car' \"subsonic-type\" for determining which suf
              " "
              (when-let* ((year (alist-get 'year item)))
                (format "(%s)" year))))
-    (:track
+    (:song
      (concat (listen-subsonic--format-column (alist-get 'artist item)
                                              12 'listen-artist)
              " "
@@ -387,96 +387,98 @@ Returns the selected playlist's ID as a string."
   (listen-queue-add-tracks (listen-subsonic-get-starred-tracks)
                            queue))
 
-;; TODO: Do this
-;; (defun listen-library-from-subsonic ()
-;;   "Turn a list of `listen-track's into a `listen-library' view."
-;;   (interactive)
-;;   (let* ((src (listen-subsonic-source)))
-;;     (listen-library (cdr src)
-;;                     :name (format "Subsonic: %s" (car src)))))
+;;;; Library view
+;; This is annoying for a few reasons. If a library is massive, it may take minutes to generate a
+;; full library. So we generate a taxy view of just artists, and then a proper listen-library view
+;; of the artist's albums and songs.
 
-;; TODO: Truncate search results before it hits affixation
-;; TODO: Complete this implementation (maybe)
-;; (defun listen-subsonic-search (query)
-;;   "Search the server for QUERY, and display artists, albums and tracks.
+(defvar listen-subsonic-library--artists-library "*Listen Subsonic Artists*")
 
-;; - Selecting a track adds it to the queue.
-;; - Selecting an artist or album opens the `listen-subsonic-find' browsing functionality."
-;;   (interactive (list (read-string "Search: ")))
-;;   (let* ((items (infrasonic-search (listen-subsonic--client) query))
-;;          (entries nil))
+(defvar-keymap listen-subsonic-library-artists-mode-map
+  :parent magit-section-mode-map
+  "RET" #'listen-subsonic-library-open-artist
+  "g" #'listen-subsonic-library)
 
-;;     (unless items
-;;       (user-error "No search results for '%s'" query))
+(define-derived-mode listen-subsonic-library-artists-mode magit-section-mode "Listen-Subsonic-Artists"
+  "Browse artists on your OpenSubsonic server.")
 
-;;     ;; Build entries with unique display names.
-;;     (dolist (item items)
-;;       (let* ((type (alist-get 'subsonic-type item))
-;;              (face (pcase type
-;;                      (:artist 'listen-artist)
-;;                      (:album 'listen-album)
-;;                      (:track 'listen-title)))
-;;              (name (propertize
-;;                     (truncate-string-to-width
-;;                      ;; Ensure that tracks have a name elem
-;;                      (alist-get 'name item)
-;;                      (- listen-subsonic--menu-max-width 5) 0 nil t)
-;;                     'face face))
-;;              (disp-name name)
-;;              (count 1))
-;;         (while (assoc disp-name entries #'equal)
-;;           (cl-incf count)
-;;           (setq disp-name (format "%s %s"
-;;                                   name
-;;                                   (propertize (format "(%d)" count)
-;;                                               'face 'shadow))))
-;;         (push (cons disp-name item) entries)))
-;;     (setq entries (nreverse entries))
+(defun listen-subsonic-library--artist-index-key (artist)
+  "Group ARTIST by first letter.
 
-;;     (let* ((affix-fn (listen-subsonic--affixation
-;;                       entries
-;;                       #'listen-subsonic--item-suffix nil
-;;                       #'listen-subsonic--item-prefix nil))
-;;            ;; convert keyword to string for group function
-;;            (group-fn (lambda (cand transform)
-;;                        (if transform
-;;                            cand
-;;                          (let ((type (alist-get 'subsonic-type (alist-get cand entries nil nil #'equal))))
-;;                            (pcase type
-;;                              (:artist "Artists")
-;;                              (:album "Albums")
-;;                              (:track "Songs"))))))
-;;            (selected
-;;             (listen-subsonic--completing-read
-;;              "Select: " entries
-;;              `((affixation-function . ,affix-fn)
-;;                (group-function . ,group-fn)))))
+The OpenSubsonic API returns artists indexed by first letter,
+categorising into A-Z, or symbols in #."
+  (let* ((name (or (alist-get 'name artist) ""))
+         (first (if (> (length name) 0) (downcase (substring name 0 1)) "#")))
+    (if (string-match-p "^[a-z]$" first) first "#")))
 
-;;       (let ((type (alist-get 'subsonic-type selected)))
-;;         (pcase type
-;;           (:artist
-;;            (when-let* ((name (alist-get 'name selected))
-;;                        (result (listen-subsonic--find-step
-;;                                 :artist
-;;                                 (alist-get 'id selected)
-;;                                 name))
-;;                        (tracks (funcall (nth 0 result))))
-;;              (listen-queue-add-tracks tracks (listen-queue-complete :allow-new-p t))
-;;              (message "Added %d tracks from '%s'." (length tracks) name)))
-;;           (:album
-;;            (when-let* ((name (alist-get 'name selected))
-;;                        (result (listen-subsonic--find-step
-;;                                 :album
-;;                                 (alist-get 'id selected)
-;;                                 name))
-;;                        (tracks (funcall (nth 0 result))))
-;;              (listen-queue-add-tracks tracks (listen-queue-complete :allow-new-p t))
-;;              (message "Added %d tracks from '%s'." (length tracks) name)))
-;;           (:track
-;;            ;; add a track to the queue
-;;            (let ((track (listen-subsonic--json-to-listen selected)))
-;;              (listen-queue-add-tracks (list track) (listen-queue-complete :allow-new-p t))
-;;              (message "Added '%s' to the queue." (listen-track-title track)))))))))
+(defun listen-subsonic-library--format-artist (artist)
+  "Return library display string for ARTIST.
+
+Shows artist name and number of albums. Gives \"[unknown artist]\" to
+artists with missing names."
+  (let ((name (or (alist-get 'name artist) "[unknown artist]"))
+        (albums (or (alist-get 'albumCount artist) 0)))
+    (format "%s  (%s albums)" name albums)))
+
+;;;###autoload
+(defun listen-subsonic-library ()
+ "Open a library view of all Subsonic artists.
+
+`RET' opens that artist in an actual `listen-library' library view."
+  (interactive)
+  (let* ((client (listen-subsonic--client))
+         (artists (infrasonic-get-artists-flat client))
+         (format-fn #'listen-subsonic-library--format-artist)
+         (make-fn)
+         (taxy))
+    (setq make-fn
+          (lambda (&rest args)
+            (apply #'make-taxy-magit-section
+                   :make make-fn
+                   :format-fn format-fn
+                   args)))
+    (setq taxy
+          (funcall make-fn
+                   :name "Artists"
+                   :take (apply-partially #'taxy-take-keyed
+                                          (list #'listen-subsonic-library--artist-index-key))))
+    (with-current-buffer (get-buffer-create listen-subsonic-library--artists-library)
+      (listen-subsonic-library-artists-mode)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (taxy-magit-section-insert
+          (taxy-sort* #'string< #'taxy-name
+            (taxy-fill artists (taxy-emptied taxy))))
+        (goto-char (point-min)))
+      (pop-to-buffer (current-buffer)))))
+
+(defun listen-subsonic-library--artist-at-point ()
+  "Return artist alist at point within an Artists taxy library.
+
+Used to get the artist the user selected, and should be passed to
+`listen-subsonic-library-open-artist'."
+  (when-let ((sec (magit-current-section))
+             (val (oref sec value)))
+    (when (and (listp val)
+               (eq (alist-get 'subsonic-type val) :artist))
+      val)))
+
+;;;###autoload
+(defun listen-subsonic-library-open-artist (&optional artist)
+  "Open selected ARTIST's albums/songs in an actual `listen-library'."
+  (interactive)
+  (let* ((artist (or artist (listen-subsonic-library--artist-at-point)))
+         (client (listen-subsonic--client)))
+    (unless artist
+      (user-error "No artist at point"))
+    (let* ((artist-id (alist-get 'id artist))
+           (artist-name (or (alist-get 'name artist) "Subsonic Artist")))
+      (unless artist-id
+        (user-error "Artist has no id"))
+      (let* ((songs (infrasonic-get-all-songs client artist-id :artist))
+             (tracks (mapcar (lambda (s) (listen-subsonic--json-to-listen s client))
+                             songs)))
+        (listen-library tracks :name (format "Subsonic: %s" artist-name))))))
 
 (provide 'listen-subsonic)
 
