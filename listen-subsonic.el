@@ -266,8 +266,11 @@ This function also sets TRACK's in-memory star status accordingly."
   "Read a candidate with PROMPT from ENTRIES.
 Returns the chosen item.
 
-ENTRIES is an alist of display strings, and its corresponding value ((disp-str . item) ...).
-EXTRA-METADATA is an alist of completion metadata pairs for `completing-read', to be `cons'ed with
+ENTRIES is an alist of display strings, and its corresponding
+value ((disp-str . item) ...).
+
+EXTRA-METADATA is an alist of completion metadata pairs for
+`completing-read', to be `cons'ed with
 (category . listen-subsonic). For example:
 '((affixation-function . <fn>)
   (group-function . <fn>)
@@ -288,10 +291,14 @@ ENTRIES is an alist of display strings and their corresponding item: ((disp-str 
 Where an item in the ENTRIES alist may be:
 - the symbol :up or :this for special candidates such as \"..\" and \"[All]\",
 - a Subsonic JSON alist for normal nodes.
+
 SUFFIX-FN returns the suffix string from the object found in HASHTABLE. When nil, no suffix is
 applied.
+
 SUFFIX-FACE is applied to the suffix.
+
 PREFIX-FN returns a prefix string from the object found in HASHTABLE. When nil,no prefix is applied.
+
 PREFIX-FACE is applied to the prefix."
   (lambda (cands)
     (mapcar
@@ -299,14 +306,32 @@ PREFIX-FACE is applied to the prefix."
        (let ((item (alist-get cand entries nil nil #'equal)))
          (if (memq item '(:up :this))
              (list cand "  " "")
-           (let* ((len (string-width cand))
-                  (padding (make-string (- listen-subsonic--menu-max-width len) ?\s))
+           (let* ((disp (truncate-string-to-width (or cand "")
+                                                  listen-subsonic--menu-max-width
+                                                  0 ?\s t))
+                  (disp-id (propertize cand 'display disp))
+                  (len (string-width disp))
+                  (pad (max 0 (- listen-subsonic--menu-max-width len)))
+                  (padding (make-string pad ?\s))
                   (suf (if suffix-fn (funcall suffix-fn item) ""))
                   (suffix (if suffix-face (propertize suf 'face suffix-face) suf))
                   (pre (if prefix-fn (funcall prefix-fn item) ""))
                   (prefix (if prefix-face (propertize pre 'face prefix-face) pre)))
-             (list cand prefix (concat padding suffix))))))
+             (list disp-id prefix (concat padding suffix))))))
      cands)))
+
+(defun listen-subsonic--comp-sorter (entries comp)
+  "Convert a binary COMP function comparing ENTRIES to a sort function.
+Returns a sort function for sorting `completing-read' candidates.
+
+COMP is a binary (lambda (album-a album-b) ...) and is applied after
+mapping candidate strings back to album objects via ENTRIES."
+  (lambda (cands)
+    (sort (copy-sequence cands)
+          (lambda (sa sb)
+            (funcall comp
+                     (alist-get sa entries nil nil #'equal)
+                     (alist-get sb entries nil nil #'equal))))))
 
 (defun listen-subsonic--format-column (str width &optional face)
   "Format STR to fit WIDTH.
@@ -321,16 +346,22 @@ Apply FACE if non-nil."
 ITEM must include element with `car' \"subsonic-type\" for determining which suffix to use."
   (pcase (alist-get 'subsonic-type item)
     (:artist
-     (format "%s albums" (or (alist-get 'albumCount item) 0)))
+     (format " %s albums" (or (alist-get 'albumCount item) 0)))
     (:album
-     (concat (listen-subsonic--format-column (alist-get 'artist item)
-                                             12 'listen-artist)
+     (concat " "
+             (listen-subsonic--format-column (alist-get 'artist item)
+                                             20 'listen-artist)
              " "
              (when-let* ((year (alist-get 'year item)))
-               (format "(%s)" year))))
+               (format "%s" year))
+             " "
+             (propertize (when-let* ((pc (alist-get 'playCount item)))
+                           (format "(%s plays)" pc))
+                         'face 'shadow)))
     (:song
-     (concat (listen-subsonic--format-column (alist-get 'artist item)
-                                             12 'listen-artist)
+     (concat " "
+             (listen-subsonic--format-column (alist-get 'artist item)
+                                             20 'listen-artist)
              " "
              (listen-subsonic--format-column (alist-get 'album item)
                                              20 'listen-album)
@@ -360,16 +391,36 @@ Returns the selected playlist's ID as a string."
          (name (completing-read "Playlist: " playlists nil t)))
     (alist-get name playlists nil nil #'equal)))
 
-(defun listen-subsonic--read-album (albums &optional prompt)
+(defun listen-subsonic--read-album (albums &optional prompt sort-comp affix-fn)
   "Prompt user to select a Subsonic album using `completing-read'.
-Returns the selected album's ID as a string."
+Returns the selected album's ID as a string.
+
+PROMPT is an optional string for the prompt, defaunting to \"Album: \".
+
+SORT-FN is an optional binary function (lambda (album1 album2) ...). It
+is passed as completion metadata `display-sort-function' and
+`cycle-sort-function' for sorting the `completing-read' interface.
+Defaults to nil.
+
+AFFIX-FN allows decorating entries in the `completing-read' interface.
+Defaults to a star prefix, and album suffix."
   (let* ((prompt (or prompt "Album: "))
-         (entries (mapcar (lambda (album)
-                            (cons (or (alist-get 'name album) "[unknown album]")
-                                  album))
-                          albums))
-         (names (mapcar #'car entries)))
-    (listen-subsonic--completing-read prompt entries)))
+         (entries
+          (mapcar (lambda (album)
+                    (let* ((typed (cons (cons 'subsonic-type :album) album))
+                           (disp (or (alist-get 'name typed) "[unknown album]")))
+                      (cons disp typed)))
+                  albums))
+         (sort-fn (listen-subsonic--comp-sorter entries sort-comp))
+         (affix-fn (or affix-fn
+                       (listen-subsonic--affixation
+                        entries
+                        #'listen-subsonic--item-suffix nil
+                        #'listen-subsonic--item-prefix nil)))
+         (extra-metadata `((affixation-function . ,affix-fn)
+                           (display-sort-function . ,sort-fn)
+                           (cycle-sort-function . ,sort-fn))))
+    (listen-subsonic--completing-read prompt entries extra-metadata)))
 
 (defun listen-subsonic-get-random-tracks (n)
   "Fetch N random songs from the server.
@@ -402,7 +453,7 @@ Returns a list of N `listen-track's."
 
 ;; Queue from a list of albums
 
-(defun listen-subsonic--queue-album-from-list (queue type &optional prompt)
+(defun listen-subsonic--queue-album-from-list (queue type &optional prompt sort-fn)
   "Add an album from TYPE list to QUEUE.
 
 TYPE is passed to `infrasonic-get-album-list', and may be:
@@ -417,29 +468,76 @@ TYPE is passed to `infrasonic-get-album-list', and may be:
   (let* ((type (or type (error "Type must be non-nil")))
          (client (listen-subsonic--client))
          (albums (infrasonic-get-album-list client type))
-         (album (listen-subsonic--read-album albums prompt))
+         (album (listen-subsonic--read-album albums prompt sort-fn))
          (tracks (listen-subsonic--get-all-tracks (alist-get 'id album) :album)))
     (listen-queue-add-tracks tracks queue)))
 
 (defun listen-subsonic-queue-recent-release (queue)
   "Add a recently released album to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
-  (listen-subsonic--queue-album-from-list queue :newest "Recently released albums: "))
+  ;; Sort by year, then alphabetically
+  (let ((sort-comp
+         (lambda (a b)
+           (let* ((ya (or (alist-get 'year a) 0))
+                  (yb (or (alist-get 'year b) 0))
+                  (ya (if (stringp ya) (string-to-number ya) ya))
+                  (yb (if (stringp yb) (string-to-number yb) yb)))
+             (cond
+              ;; Different year -> numeric
+              ((/= ya yb) (> ya yb))
+              ;; Same year -> alphabetical
+              (t (string-lessp (or (alist-get 'name a) "")
+                               (or (alist-get 'name b) ""))))))))
+    (listen-subsonic--queue-album-from-list queue
+                                            :newest
+                                            "Recently released albums: "
+                                            sort-comp)))
 
 (defun listen-subsonic-queue-most-played (queue)
   "Add a frequently played album to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
-  (listen-subsonic--queue-album-from-list queue :frequent "Frequently played albums: "))
+  (let ((sort-comp
+         (lambda (a b)
+           (let* ((ca (or (alist-get 'playCount a) 0))
+                  (cb (or (alist-get 'playCount b) 0))
+                  (ca (if (stringp ca) (string-to-number ca) ca))
+                  (cb (if (stringp cb) (string-to-number cb) cb)))
+             (cond
+              ;; Different year -> numeric
+              ((/= ca cb) (> ca cb))
+              ;; Same year -> alphabetical
+              (t (string-lessp (or (alist-get 'name a) "")
+                               (or (alist-get 'name b) ""))))))))
+    (listen-subsonic--queue-album-from-list queue
+                                            :frequent
+                                            "Frequently played albums: "
+                                            sort-comp)))
 
-(defun listen-subsonic-queue-recent-addition (queue)
-  "Add a recently added-to-server album to QUEUE."
+(defun listen-subsonic-queue-recent-play (queue)
+  "Add a recently played album to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
-  (listen-subsonic--queue-album-from-list queue :recent "Recently added albums: "))
+  (let ((sort-comp
+         (lambda (a b)
+           (let* ((ta (float-time (date-to-time (or (alist-get 'created a) 0))))
+                  (tb (float-time (date-to-time (or (alist-get 'created b) 0)))))
+             (> ta tb)))))
+    (listen-subsonic--queue-album-from-list queue
+                                            :recent
+                                            "Recently played albums: "
+                                            sort-comp)))
 
 (defun listen-subsonic-queue-starred-album (queue)
   "Add a starred album to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
-  (listen-subsonic--queue-album-from-list queue :starred "Starred albums: "))
+  (let ((sort-comp
+         (lambda (a b)
+           (let* ((sa (float-time (date-to-time (or (alist-get 'starred a) 0))))
+                  (sb (float-time (date-to-time (or (alist-get 'starred b) 0)))))
+             (> sa sb)))))
+    (listen-subsonic--queue-album-from-list queue
+                                            :starred
+                                            "Starred albums: "
+                                            sort-comp)))
 
 ;;;; Library view
 ;; This is annoying for a few reasons. If a library is massive, it may take minutes to generate a
