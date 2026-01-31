@@ -517,9 +517,9 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
      :transient t)
     ("qap" "from playlist file" listen-queue-add-from-playlist-file
      :transient t)]
-   ["Subsonic"
-    ("qva" "queue starred" listen-subsonic-queue-starred-tracks
-     :transient t)]])
+   ;; TODO: Grey-out when listen-subsonic-url is not set
+    ["Subsonic"
+     ("qs" "from Subsonic" listen-subsonic-queue-menu)]])
 
 ;; NOTE: This alias must come after the command it refers to, otherwise the autoload file fails to
 ;; finish loading (without warning), which breaks a lot of things!

@@ -36,6 +36,7 @@
 (require 'subr-x)       ; string-empty-p
 (require 'map)          ; map-let/elt
 (require 'cl-lib)       ; cl-incf
+(require 'transient)    ; Transient menus
 
 ;; Declares
 
@@ -429,6 +430,20 @@ Returns a list of N `listen-track's."
           (infrasonic-get-random-songs (listen-subsonic--client) n)))
 
 ;;;; Add to queue functions
+
+(transient-define-prefix listen-subsonic-queue-menu ()
+  "Queue tracks from Subsonic."
+  :info-manual "(listen) Subsonic Queue"
+  ["Queue from Subsonic"
+   ["Albums"
+    ("n" "New releases" listen-subsonic-queue-recent-release)
+    ("m" "Most played" listen-subsonic-queue-most-played)
+    ("r" "Recently listened" listen-subsonic-queue-recent-play)
+    ("s" "Starred albums" listen-subsonic-queue-starred-album)]
+   ["Songs"
+    ("p" "Random songs" listen-subsonic-queue-random)
+    ("S" "Starred tracks" listen-subsonic-queue-starred-tracks)
+    ("l" "Playlist" listen-subsonic-queue-playlist)]])
 
 (defun listen-subsonic-queue-random (n queue)
   "Add N random songs to QUEUE."
