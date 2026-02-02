@@ -215,28 +215,43 @@ Only tracks with the source \"subsonic\" will be included."
         (infrasonic-create-playlist (listen-subsonic--client) ids name)
       (user-error "No Subsonic tracks found"))))
 
-(defun listen-subsonic--scrobble (player status)
+(defun listen-subsonic--scrobble (player status &optional callback errback)
   "Scrobble the STATUS of the current track playing in PLAYER's queue to
 the Subsonic API.
 Returns the unparsed API response.
 
 Only tracks with the source \"subsonic\" will be scrobbled.
-STATUS may be either `:playing' or `:finished'."
+
+STATUS may be either `:playing' or `:finished'.
+
+CALLBACK and ERRBACK are optional parameters enabling asynchronous scrobbling."
   (when-let* ((queue (map-elt (listen-player-etc player) :queue))
               (track (listen-queue-current queue))
               (source (equal (map-elt (listen-track-etc track) 'source) "subsonic"))
               (id (alist-get 'id (listen-track-etc track))))
-    (infrasonic-scrobble (listen-subsonic--client) id status)))
+    (infrasonic-scrobble (listen-subsonic--client) id status callback errback)))
 
 (defun listen-subsonic-scrobble-start (player)
   "Notifies the server that we have started playing a track in PLAYER.
 Should be added to `listen-track-start-functions'."
-  (listen-subsonic--scrobble player :playing))
+  (listen-subsonic--scrobble player
+                             :playing
+                             #'ignore
+                             (lambda (err)
+                               (display-warning 'listen-subsonic
+                                                (format "Scrobble error: %s" err)
+                                                :warning))))
 
 (defun listen-subsonic-scrobble-end (player)
   "Notifies the server that we have finished a track in PLAYER.
 Should be added to `listen-track-end-functions'."
-  (listen-subsonic--scrobble player :finished))
+  (listen-subsonic--scrobble player
+                             :finished
+                             #'ignore
+                             (lambda (err)
+                               (display-warning 'listen-subsonic
+                                                (format "Scrobble error: %s" err)
+                                                :warning))))
 
 ;;;; Interactive functions
 
