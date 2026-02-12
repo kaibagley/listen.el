@@ -519,7 +519,14 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
      :transient t)]
    ["Subsonic"
     ("qv" "from Subsonic" listen-subsonic-queue-menu
-     :inapt-if (lambda () (not listen-subsonic-url)))]])
+     :inapt-if (lambda () (not listen-subsonic-url)))
+    ;; Change colour something to indicate if this will star or unstar
+    ("q*" "Star/unstar" listen-subsonic-star-track
+     :inapt-if (lambda () (or (not listen-subsonic-url)
+                              (not listen-player))))
+    ("qr" "Rate track" listen-subsonic-rate-track
+     :inapt-if (lambda () (or (not listen-subsonic-url)
+                              (not listen-player))))]])
 
 ;; NOTE: This alias must come after the command it refers to, otherwise the autoload file fails to
 ;; finish loading (without warning), which breaks a lot of things!
@@ -548,7 +555,23 @@ If DISPLAYP, show the buffer; otherwise just update existing one."
                           (listen-player-mode)
                           (current-buffer)))))
                 (metadata (key track)
-                  (or (listen-track-metadata-get key track) "")))
+                  ;; Try struct slot first (works for subsonic tracks),
+                  ;; then fall back to metadata-get (local file tags).
+                  (or (pcase key
+                        ("artist" (listen-track-artist track))
+                        ("title" (listen-track-title track))
+                        ("album" (listen-track-album track))
+                        (_ nil))
+                      (listen-track-metadata-get key track)
+                      ""))
+                (subsonic-p (track)
+                  (equal (alist-get 'source (listen-track-etc track)) "subsonic"))
+                (rating-str (track)
+                  (when-let* ((rating (listen-track-rating track))
+                              ((not (equal "-1" rating))))
+                    (format "%.0f/5" (* 5 (string-to-number rating)))))
+                (starred-p (track)
+                  (alist-get 'starred (listen-track-etc track))))
       (with-current-buffer (buffer-for player)
         (setq-local listen-player player)
         (let ((inhibit-read-only t)
@@ -558,6 +581,9 @@ If DISPLAYP, show the buffer; otherwise just update existing one."
           (erase-buffer)
           (if (not (listen--playing-p player))
               (insert "Not playing")
+            ;; Cover art for subsonic tracks (large, 256px)
+            (when (and track (subsonic-p track) (display-graphic-p))
+              (listen-subsonic--insert-cover-art track 256))
             (insert (with-face "Artist: " 'bold)
                     (with-face (metadata "artist" track) 'listen-artist) "\n")
             (insert (with-face " Title: " 'bold)
@@ -568,6 +594,14 @@ If DISPLAYP, show the buffer; otherwise just update existing one."
                     (propertize (metadata "album" track)
                                 'face 'listen-album
                                 'wrap-prefix "        ") "\n")
+            ;; Starred and rating for subsonic tracks
+            (when (and track (subsonic-p track))
+              (insert (with-face "  Star: " 'bold)
+                      (if (starred-p track)
+                          (propertize "★ Starred" 'face 'listen-starred)
+                        "Not starred") "\n")
+              (insert (with-face "Rating: " 'bold)
+                      (or (rating-str track) "Not rated") "\n"))
              (insert (with-face "  Time: " 'bold) (listen-format-seconds (or (listen--elapsed player) 0))
                      " / " (listen-format-seconds (or (listen-track-duration track) 0))
                      " (-" (listen-format-seconds (- (or (listen-track-duration track) 0)

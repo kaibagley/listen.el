@@ -133,6 +133,9 @@ Must be either \"http\" or \"https\" (default)."
 (defvar listen-subsonic--menu-max-width 50
   "Maximum width of strings returned by search function.")
 
+(defvar listen-subsonic--image-cache (make-hash-table :test 'equal)
+  "Cache of image descriptors keyed by (TRACK-ID . SIZE).")
+
 ;;;; General helpers
 
 (defun listen-subsonic--client ()
@@ -168,11 +171,11 @@ Returns a `listen-track' struct."
 
 ;;;; Read requests
 
-;; (defun listen-subsonic-search-tracks (query)
-;;   "Search the server for tracks matching QUERY.
-;; Returns a list of `listen-track's."
-;;   (mapcar #'listen-subsonic--json-to-listen
-;;           (infrasonic-search-tracks query)))
+(defun listen-subsonic-search-tracks (query)
+  "Search the server for tracks matching QUERY.
+Returns a list of `listen-track's."
+  (mapcar #'listen-subsonic--json-to-listen
+          (infrasonic-search-songs (listen-subsonic--client) query nil)))
 
 (defun listen-subsonic-get-starred-tracks ()
   "Fetch all starred songs from the server.
@@ -454,11 +457,17 @@ Returns a list of N `listen-track's."
     ("n" "New releases" listen-subsonic-queue-recent-release)
     ("m" "Most played" listen-subsonic-queue-most-played)
     ("r" "Recently listened" listen-subsonic-queue-recent-play)
-    ("s" "Starred albums" listen-subsonic-queue-starred-album)]
+    ("*" "Starred albums" listen-subsonic-queue-starred-album)]
    ["Songs"
     ("p" "Random songs" listen-subsonic-queue-random)
     ("S" "Starred tracks" listen-subsonic-queue-starred-tracks)
-    ("l" "Playlist" listen-subsonic-queue-playlist)]])
+    ("l" "Playlist" listen-subsonic-queue-playlist)
+    ("s" "Search" listen-subsonic-queue-search)]
+   ["Manage playlists"
+    ("P" "Create playlist" listen-subsonic-create-playlist)
+    ("D" "Delete playlist" listen-subsonic-delete-playlist)
+    ("U" "Update playlist" listen-subsonic-update-playlist)
+    ("R" "Rename playlist" listen-subsonic-rename-playlist)]])
 
 (defun listen-subsonic-queue-random (n queue)
   "Add N random songs to QUEUE."
@@ -661,6 +670,186 @@ Used to get the artist the user selected, and should be passed to
              (tracks (mapcar (lambda (s) (listen-subsonic--json-to-listen s client))
                              songs)))
         (listen-library tracks :name (format "Subsonic: %s" artist-name))))))
+
+;;;; Search
+
+(defun listen-subsonic--search-select (query)
+  "Search for QUERY and prompt user to select results.
+Returns a list of `listen-track's for the selected item.
+
+The user selects from a mixed list of artists, albums, and songs.
+Selecting an artist or album expands it to all its songs."
+  (let* ((client (listen-subsonic--client))
+         (results (infrasonic-search client query))
+         (entries (mapcar (lambda (item)
+                           (let* ((type (alist-get 'subsonic-type item))
+                                  (name (alist-get 'name item))
+                                  (disp (pcase type
+                                          ;; Think of a better indicator...
+                                          (:artist (format "🎸 %s" name))
+                                          (:album (format "💿 %s" name))
+                                          (:song (format "🎵 %s" name)))))
+                             (cons disp item)))
+                         results))
+         (affix-fn (listen-subsonic--affixation
+                    entries
+                    #'listen-subsonic--item-suffix nil
+                    #'listen-subsonic--item-prefix nil))
+         (extra-metadata `((affixation-function . ,affix-fn)
+                           (display-sort-function . identity)
+                           (cycle-sort-function . identity)))
+         (selected (listen-subsonic--completing-read
+                    (format "Search results for \"%s\": " query)
+                    entries extra-metadata))
+         (type (alist-get 'subsonic-type selected))
+         (id (alist-get 'id selected)))
+    (pcase type
+      (:song (list (listen-subsonic--json-to-listen selected client)))
+      (:album (listen-subsonic--get-all-tracks id :album))
+      (:artist (listen-subsonic--get-all-tracks id :artist)))))
+
+(defun listen-subsonic-queue-search (query queue)
+  "Search for QUERY and add selected results to QUEUE."
+  (interactive
+   (list (read-string "Search Subsonic: ")
+         (listen-queue-complete :allow-new-p t)))
+  (let ((tracks (listen-subsonic--search-select query)))
+    (if tracks
+        (listen-queue-add-tracks tracks queue)
+      (user-error "No results for \"%s\"" query))))
+
+(defun listen-subsonic-library-search (query)
+  "Search for QUERY and show selected results in a `listen-library' view."
+  (interactive (list (read-string "Search Subsonic: ")))
+  (let ((tracks (listen-subsonic--search-select query)))
+    (if tracks
+        (listen-library tracks :name (format "Subsonic search: %s" query))
+      (user-error "No results for \"%s\"" query))))
+
+;;;; Cover art
+
+;; TODO: slightly buggy, 2 images flash on screen before settling to 1
+;; TODO: might move this to infrasonic.el
+(defun listen-subsonic--cover-art-path (track-id)
+  "Return the local cache path for cover art of TRACK-ID."
+  (expand-file-name (format "art-%s.jpg" track-id)
+                    listen-subsonic-cache-dir))
+
+(defun listen-subsonic--ensure-cover-art (track callback &optional size)
+  "Ensure cover art for TRACK is cached, then call CALLBACK with the file path.
+SIZE overrides the default art size.  CALLBACK receives the path
+to the cached image file."
+  (let* ((etc (listen-track-etc track))
+         (id (alist-get 'id etc)))
+    (when id
+      (let ((path (listen-subsonic--cover-art-path id)))
+        (if (file-exists-p path)
+            (funcall callback path)
+          (infrasonic-download-art (listen-subsonic--client)
+                                  id path size
+                                  callback))))))
+
+(defun listen-subsonic--insert-cover-art (track &optional size)
+  "Insert cover art for TRACK into the current buffer.
+SIZE is the pixel edge length (defaults to 128).
+Caches image descriptors in `listen-subsonic--image-cache' so
+repeated calls (e.g. the 1-second status buffer timer) avoid
+re-reading from disk."
+  (let* ((size (or size 128))
+         (id (alist-get 'id (listen-track-etc track)))
+         (cache-key (cons id size))
+         (cached-image (gethash cache-key listen-subsonic--image-cache))
+         (buffer (current-buffer))
+         (marker (copy-marker (point))))
+    (if cached-image
+        ;; cache hit
+        (progn
+          (insert-image cached-image " ")
+          (insert "\n"))
+      ;; miss, read and then cache
+      (listen-subsonic--ensure-cover-art
+       track
+       (lambda (path)
+         (when (and (buffer-live-p buffer)
+                    (file-exists-p path))
+           (let ((image (create-image path nil nil
+                                      :width size :height size
+                                      :ascent 'center)))
+             (puthash cache-key image listen-subsonic--image-cache)
+             (with-current-buffer buffer
+               (let ((inhibit-read-only t))
+                 (save-excursion
+                   (goto-char marker)
+                   (insert-image image " ")
+                   (insert "\n")))))))
+       size))))
+
+;;;; Rating
+
+(defun listen-subsonic-rate-track (track rating)
+  "Set TRACK's rating to RATING (0-5).
+When called interactively, rate the currently playing track.
+RATING of 0 removes the rating."
+  (interactive
+   (let ((track (listen-current-track)))
+     (unless track
+       (user-error "No track playing"))
+     (list track (read-number "Rating (0-5): "
+                              (if-let ((r (listen-track-rating track)))
+                                  (round (* 5 (string-to-number r)))
+                                0)))))
+  (unless (and (integerp rating) (<= 0 rating 5))
+    (user-error "Rating must be 0-5"))
+  (when-let* ((id (alist-get 'id (listen-track-etc track))))
+    (infrasonic-set-rating
+     (listen-subsonic--client) id rating
+     (lambda (_)
+       (setf (listen-track-rating track)
+             (if (zerop rating) nil
+               (format "%f" (/ rating 5.0))))
+       (message "Rated '%s' %s/5"
+                (listen-track-title track) rating)))))
+
+;;;; Playlists
+
+(defun listen-subsonic-delete-playlist ()
+  "Delete a Subsonic playlist selected with completion."
+  (interactive)
+  (let* ((playlists (infrasonic-get-playlists (listen-subsonic--client)))
+         (name (completing-read "Delete playlist: " playlists nil t))
+         (id (alist-get name playlists nil nil #'equal)))
+    (when (yes-or-no-p (format "Really delete playlist \"%s\"? " name))
+      (infrasonic-delete-playlist (listen-subsonic--client) id)
+      (message "Deleted playlist \"%s\"" name))))
+
+(defun listen-subsonic-update-playlist (queue)
+  "Update a Subsonic playlist with tracks from QUEUE.
+Only Subsonic-sourced tracks in QUEUE will be included.
+The playlist's track list is replaced entirely."
+  (interactive (list (listen-queue-complete)))
+  (let* ((playlists (infrasonic-get-playlists (listen-subsonic--client)))
+         (name (completing-read "Update playlist: " playlists nil t))
+         (id (alist-get name playlists nil nil #'equal))
+         (ids (mapcan (lambda (track)
+                        (let ((etc (listen-track-etc track)))
+                          (when (equal (alist-get 'source etc) "subsonic")
+                            (list (alist-get 'id etc)))))
+                      (listen-queue-tracks queue))))
+    (if ids
+        (progn
+          (infrasonic-update-playlist (listen-subsonic--client) id ids)
+          (message "Updated playlist \"%s\" with %d tracks" name (length ids)))
+      (user-error "No Subsonic tracks found in queue"))))
+
+(defun listen-subsonic-rename-playlist ()
+  "Rename a Subsonic playlist."
+  (interactive)
+  (let* ((playlists (infrasonic-get-playlists (listen-subsonic--client)))
+         (old-name (completing-read "Rename playlist: " playlists nil t))
+         (id (alist-get old-name playlists nil nil #'equal))
+         (new-name (read-string (format "Rename \"%s\" to: " old-name) old-name)))
+    (infrasonic-update-playlist (listen-subsonic--client) id nil new-name)
+    (message "Renamed playlist to \"%s\"" new-name)))
 
 (provide 'listen-subsonic)
 

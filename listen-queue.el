@@ -176,7 +176,7 @@ Useful for when `save-excursion' does not preserve point."
                  (list :name "r/5"
                        :getter (lambda (track _table)
                                  (if-let ((rating (listen-track-rating track))
-                                          ((not (equal "-1" rating))))
+                                          (not (equal "-1" rating)))
                                      (progn
                                        (setf rating (number-to-string (* 5 (string-to-number rating))))
                                        (propertize rating 'face 'listen-rating))
@@ -757,6 +757,10 @@ tracks in the queue unchanged)."
       (read-only-mode)
       (erase-buffer)
       (toggle-truncate-lines 1)
+      ;; Cover art for subsonic tracks (small, 128px)
+      (when (and (equal (alist-get 'source (listen-track-etc track)) "subsonic")
+                 (display-graphic-p))
+        (listen-subsonic--insert-cover-art track 128))
       (cl-labels ((get (slot)
                     (cons (capitalize (symbol-name slot))
                           (cl-struct-slot-value 'listen-track slot track))))
@@ -766,17 +770,40 @@ tracks in the queue unchanged)."
                (list :name "Value" :getter (lambda (row _table) (cdr row))))
          :objects-function
          (lambda ()
-           (append (list (get 'filename)
-                         (get 'artist)
-                         (get 'title)
-                         (get 'album)
-                         (get 'number)
-                         (get 'date)
-                         (cons " " " "))
-                   ;; TODO: A way for Subsonic songs to show metadata here
-                   (sort (listen-info--decode-info-fields (listen-track-filename track))
-                         (lambda (a b)
-                           (string< (car a) (car b))))))
+           (let* ((base-fields (list (get 'filename)
+                                     (get 'artist)
+                                     (get 'title)
+                                     (get 'album)
+                                     (get 'number)
+                                     (get 'date)))
+                  (subsonic-p (equal (alist-get 'source (listen-track-etc track)) "subsonic"))
+                  (extra-fields
+                   (if subsonic-p
+                       ;; Subsonic: show starred, rating, and metadata from JSON
+                       (let* ((etc (listen-track-etc track))
+                              (starred (if (alist-get 'starred etc) "★ Yes" "No"))
+                              (rating (if-let ((r (listen-track-rating track))
+                                              (not (equal "-1" r)))
+                                         (format "%.0f/5" (* 5 (string-to-number r)))
+                                       "Not rated"))
+                              (metadata (listen-track-metadata track)))
+                         (append (list (cons " " " ")
+                                       (cons "Starred" starred)
+                                       (cons "Rating" rating)
+                                       (cons " " " "))
+                                 ;; Show all metadata fields from subsonic JSON
+                                 (cl-loop for (k . v) in metadata
+                                          unless (memq k '(subsonic-type name))
+                                          collect (cons (symbol-name k)
+                                                        (format "%s" v)))))
+                     ;; Local file: decode from file tags
+                     (append (list (cons " " " "))
+                             (condition-case nil
+                                 (sort (listen-info--decode-info-fields (listen-track-filename track))
+                                       (lambda (a b)
+                                         (string< (car a) (car b))))
+                               (error nil))))))
+             (append base-fields extra-fields)))
          :actions (list "q" (lambda (_) (quit-window))
                         "g" (lambda (_)
                               (listen-queue-revert-track track)
@@ -791,7 +818,7 @@ tracks in the queue unchanged)."
                                            (list filename)))))))
       (goto-char (point-min))
       (hl-line-mode 1))
-    (pop-to-buffer (current-buffer))))
+    (pop-to-buffer (current-buffer)))
 
 ;;;;; Bookmark support
 
@@ -918,7 +945,7 @@ is done."
                                                    (map-elt (listen-track-etc track) "description")
                                                    (map-elt metadata "description")
                                                    (listen-track-duration track)
-                                                   (map-elt metadata "duration"))
+                                                   (map-elt metadata "duration")))
                                              (message "Metadata for %S: %S" track metadata)
                                              ))))
                                     (kill-buffer (process-buffer process))
@@ -929,7 +956,7 @@ is done."
                                      (listen-track-filename track)))
                       (process (make-process
                                 :name "listen:fetch-metadata" :stderr stderr-buffer
-                                :noquery t :type 'pipe :buffer (current-buffer)
+                                :noquery t :connection-type 'pipe :buffer (current-buffer)
                                 :sentinel sentinel :command (if listen-queue-nice-p
                                                                 (cons "nice" command)
                                                               command))))
