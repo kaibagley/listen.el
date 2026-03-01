@@ -48,17 +48,17 @@
 (defun listen-subsonic--build-client ()
   "Build or rebuild our `listen-subsonic--client' from `listen' user options."
   (setq listen-subsonic--client
-        (when (and (stringp listen-subsonic-url)
-                   (not (string-empty-p listen-subsonic-url)))
-          (infrasonic-make-client
-           :url listen-subsonic-url
-           :protocol listen-subsonic-protocol
-           :user-agent "listen.el"
-           :api-version listen-subsonic-api-version
-           :queue-limit listen-subsonic-queue-limit
-           :timeout listen-subsonic-timeout
-           :art-size 128
-           :search-max-results listen-subsonic-search-max-results))))
+        (condition-case nil
+            (infrasonic-make-client
+             :url listen-subsonic-url
+             :protocol listen-subsonic-protocol
+             :user-agent "listen.el"
+             :api-version listen-subsonic-api-version
+             :queue-limit listen-subsonic-queue-limit
+             :timeout listen-subsonic-timeout
+             :art-size 128
+             :search-max-results listen-subsonic-search-max-results)
+          (infrasonic-error nil))))
 
 ;;;###autoload
 (defun listen-subsonic--custom-set (symbol value)
@@ -158,7 +158,7 @@ Returns a `listen-track' struct."
        :artist artist
        :title title
        :album album
-       :number (number-to-string (or track 0))
+       :number (when track (number-to-string track))
        :genre genre
        :duration (or duration 0)
        :date year
@@ -230,7 +230,7 @@ STATUS may be either `:playing' or `:finished'.
 CALLBACK and ERRBACK are optional parameters enabling asynchronous scrobbling."
   (when-let* ((queue (map-elt (listen-player-etc player) :queue))
               (track (listen-queue-current queue))
-              (source (equal (map-elt (listen-track-etc track) 'source) "subsonic"))
+              (source (equal (alist-get 'source (listen-track-etc track)) "subsonic"))
               (id (alist-get 'id (listen-track-etc track))))
     (infrasonic-scrobble (listen-subsonic--client) id status callback errback)))
 
@@ -847,8 +847,10 @@ The playlist's track list is replaced entirely."
   (let* ((playlists (infrasonic-get-playlists (listen-subsonic--client)))
          (old-name (completing-read "Rename playlist: " playlists nil t))
          (id (alist-get old-name playlists nil nil #'equal))
-         (new-name (read-string (format "Rename \"%s\" to: " old-name) old-name)))
-    (infrasonic-update-playlist (listen-subsonic--client) id nil new-name)
+         (new-name (read-string (format "Rename \"%s\" to: " old-name) old-name))
+         (songs (infrasonic-get-playlist-songs (listen-subsonic--client) id))
+         (song-ids (mapcar (lambda (s) (alist-get 'id s)) songs)))
+    (infrasonic-update-playlist (listen-subsonic--client) id song-ids new-name)
     (message "Renamed playlist to \"%s\"" new-name)))
 
 (provide 'listen-subsonic)
