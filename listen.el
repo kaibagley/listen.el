@@ -323,15 +323,17 @@ According to `listen-lighter-format', which see."
   (declare-function listen-queue-play "listen-queue")
   (declare-function listen-queue-next-track "listen-queue")
   (when (and listen-player (listen--running-p listen-player))
-    ;; Only attempt to play next track if the current track has an actual duration This prevents
-    ;; issues with Subsonic streams where MPV hasn't yet received the duration, which sometimes
-    ;; causes song skipping and Emacs blockage
-    (let ((duration (listen-player-duration listen-player)))
+    ;; Only attempt to play next track if the current track has actually played (elapsed > 0).
+    ;; This prevents issues where MPV restarts playback between tracks while still having
+    ;; the old songs elapsed time set, which could cause song skipping.
+    ;; We check elapsed instead of duration to allow Subsonic/HTTP streams (which may not
+    ;; have a known duration) to advance as long as they actually played.
+    (let ((elapsed (listen--elapsed listen-player)))
       (unless (or (listen--playing-p listen-player)
                   ;; HACK: It seems that sometimes the player gets restarted even when paused: this
                   ;; extra check should prevent that.
                   (member (listen--status listen-player) '(playing paused)))
-        (when (and duration (> duration 0))
+        (when (and elapsed (> elapsed 0))
           (run-hook-with-args 'listen-track-end-functions listen-player)))))
   (setf listen-mode-lighter
         (when (and listen-player (listen--running-p listen-player))
