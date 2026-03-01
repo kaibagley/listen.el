@@ -45,28 +45,6 @@
 ;;;; Customisation
 
 ;;;###autoload
-(defun listen-subsonic--build-client ()
-  "Build or rebuild our `listen-subsonic--client' from `listen' user options."
-  (setq listen-subsonic--client
-        (condition-case nil
-            (infrasonic-make-client
-             :url listen-subsonic-url
-             :protocol listen-subsonic-protocol
-             :user-agent "listen.el"
-             :api-version listen-subsonic-api-version
-             :queue-limit listen-subsonic-queue-limit
-             :timeout listen-subsonic-timeout
-             :art-size 128
-             :search-max-results listen-subsonic-search-max-results)
-          (infrasonic-error nil))))
-
-;;;###autoload
-(defun listen-subsonic--custom-set (symbol value)
-  "Rebuild the `infrasonic' client with SYMBOL set to VALUE."
-  (set-default symbol value)
-  (listen-subsonic--build-client))
-
-;;;###autoload
 (defgroup listen-subsonic nil
   "`listen' options for Subsonic backend."
   :group 'listen)
@@ -77,8 +55,7 @@
 For example, \"music.example.com\" or \"192.168.0.0:4533\".
 Don't include the procol/scheme or the resource path."
   :type 'string
-  :group 'listen-subsonic
-  :set #'listen-subsonic--custom-set)
+  :group 'listen-subsonic)
 
 ;;;###autoload
 (defcustom listen-subsonic-protocol "https"
@@ -86,36 +63,31 @@ Don't include the procol/scheme or the resource path."
 Must be either \"http\" or \"https\" (default)."
   :type '(choice (const :tag "HTTPS" "https")
                  (const :tag "HTTP" "http"))
-  :group 'listen-subsonic
-  :set #'listen-subsonic--custom-set)
+  :group 'listen-subsonic)
 
 ;;;###autoload
 (defcustom listen-subsonic-api-version "1.16.1"
   "OpenSubsonic API version string to advertise (e.g. \"1.16.1\")."
   :type 'string
-  :group 'listen-subsonic
-  :set #'listen-subsonic--custom-set)
+  :group 'listen-subsonic)
 
 ;;;###autoload
 (defcustom listen-subsonic-timeout 300
   "Request timeout in seconds passed to `plz'."
   :type 'integer
-  :group 'listen-subsonic
-  :set #'listen-subsonic--custom-set)
+  :group 'listen-subsonic)
 
 ;;;###autoload
 (defcustom listen-subsonic-queue-limit 5
   "Max concurrent downloads for `infrasonic''s `plz' queue."
   :type 'integer
-  :group 'listen-subsonic
-  :set #'listen-subsonic--custom-set)
+  :group 'listen-subsonic)
 
 ;;;###autoload
 (defcustom listen-subsonic-search-max-results 200
   "Maximum number of results returned by search queries."
   :type 'integer
-  :group 'listen-subsonic
-  :set #'listen-subsonic--custom-set)
+  :group 'listen-subsonic)
 
 ;; Users set infrasonic variables for URL, protocol, etc.
 
@@ -138,6 +110,21 @@ Must be either \"http\" or \"https\" (default)."
 
 ;;;; General helpers
 
+(defun listen-subsonic--build-client ()
+  "Build or rebuild our `listen-subsonic--client' from `listen' user options."
+  (setq listen-subsonic--client
+        (condition-case nil
+            (infrasonic-make-client
+             :url listen-subsonic-url
+             :protocol listen-subsonic-protocol
+             :user-agent "listen.el"
+             :api-version listen-subsonic-api-version
+             :queue-limit listen-subsonic-queue-limit
+             :timeout listen-subsonic-timeout
+             :art-size 128
+             :search-max-results listen-subsonic-search-max-results)
+          (infrasonic-error nil))))
+
 (defun listen-subsonic--client ()
   "Return the current `infrasonic' client, or build a new one and return that."
   (or listen-subsonic--client
@@ -145,6 +132,19 @@ Must be either \"http\" or \"https\" (default)."
         (listen-subsonic--build-client)
         (or listen-subsonic--client
             (user-error "Please set `listen-subsonic-url'.")))))
+
+(defun listen-subsonic--invalidate-client (&rest _)
+  "Invalidate the cached client to allow rebuilding."
+  (setq listen-subsonic--client nil))
+
+;; Add a variable watcher to reset the client on changes to custom variables
+(dolist (sym '(listen-subsonic-url
+               listen-subsonic-protocol
+               listen-subsonic-api-version
+               listen-subsonic-timeout
+               listen-subsonic-queue-limit
+               listen-subsonic-search-max-results))
+  (add-variable-watcher sym #'listen-subsonic--invalidate-client))
 
 (defun listen-subsonic--json-to-listen (json-data &optional client)
   "Convert an `infrasonic' JSON-DATA into a `listen-track'.
