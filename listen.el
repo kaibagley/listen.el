@@ -63,7 +63,7 @@
 ;; TODO: Can we load these as-needed?
 (require 'listen-mpv)
 (require 'listen-vlc)
-(require 'listen-subsonic)
+(require 'listen-infrasonic)
 
 ;;;; Variables
 
@@ -326,7 +326,7 @@ According to `listen-lighter-format', which see."
     ;; Only attempt to play next track if the current track has actually played (elapsed > 0).
     ;; This prevents issues where MPV restarts playback between tracks while still having
     ;; the old songs elapsed time set, which could cause song skipping.
-    ;; We check elapsed instead of duration to allow Subsonic/HTTP streams (which may not
+    ;; We check elapsed instead of duration to allow OpenSubsonic/HTTP streams (which may not
     ;; have a known duration) to advance as long as they actually played.
     (let ((elapsed (listen--elapsed listen-player)))
       (unless (or (listen--playing-p listen-player)
@@ -472,8 +472,8 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
     ("lq" "from queue" listen-library-from-queue)
     ("lp" "from playlist file" listen-library-from-playlist-file)]
    [""
-     ("ls" "from Subsonic" listen-subsonic-library
-      :inapt-if (lambda () (not listen-subsonic-url)))
+     ("ls" "from OpenSubsonic" listen-infrasonic-library
+      :inapt-if (lambda () (not listen-infrasonic-url)))
      ("lm" "from MPD" listen-library-from-mpd)]]
 
   [["Queue mode"
@@ -519,15 +519,15 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
      :transient t)
     ("qap" "from playlist file" listen-queue-add-from-playlist-file
      :transient t)]
-   ["Subsonic"
-    ("qv" "from Subsonic" listen-subsonic-queue-menu
-     :inapt-if (lambda () (not listen-subsonic-url)))
+   ["OpenSubsonic"
+    ("qv" "from OpenSubsonic" listen-infrasonic-queue-menu
+     :inapt-if (lambda () (not listen-infrasonic-url)))
     ;; Change colour something to indicate if this will star or unstar
-    ("q*" "Star/unstar" listen-subsonic-star-track
-     :inapt-if (lambda () (or (not listen-subsonic-url)
+    ("q*" "Star/unstar" listen-infrasonic-star-track
+     :inapt-if (lambda () (or (not listen-infrasonic-url)
                               (not listen-player))))
-    ("qr" "Rate track" listen-subsonic-rate-track
-     :inapt-if (lambda () (or (not listen-subsonic-url)
+    ("qr" "Rate track" listen-infrasonic-rate-track
+     :inapt-if (lambda () (or (not listen-infrasonic-url)
                               (not listen-player))))]])
 
 ;; NOTE: This alias must come after the command it refers to, otherwise the autoload file fails to
@@ -557,7 +557,7 @@ If DISPLAYP, show the buffer; otherwise just update existing one."
                           (listen-player-mode)
                           (current-buffer)))))
                 (metadata (key track)
-                  ;; Try struct slot first (works for subsonic tracks),
+                  ;; Try struct slot first (works for infrasonic tracks),
                   ;; then fall back to metadata-get (local file tags).
                   (or (pcase key
                         ("artist" (listen-track-artist track))
@@ -566,8 +566,8 @@ If DISPLAYP, show the buffer; otherwise just update existing one."
                         (_ nil))
                       (listen-track-metadata-get key track)
                       ""))
-                (subsonic-p (track)
-                  (equal (alist-get 'source (listen-track-etc track)) "subsonic"))
+                (infrasonic-p (track)
+                  (equal (alist-get 'source (listen-track-etc track)) "infrasonic"))
                 (rating-str (track)
                   (when-let* ((rating (listen-track-rating track))
                               ((not (equal "-1" rating))))
@@ -583,9 +583,9 @@ If DISPLAYP, show the buffer; otherwise just update existing one."
           (erase-buffer)
           (if (not (listen--playing-p player))
               (insert "Not playing")
-            ;; Cover art for subsonic tracks (large, 256px)
-            (when (and track (subsonic-p track) (display-graphic-p))
-              (listen-subsonic--insert-cover-art track 256))
+            ;; Cover art for infrasonic tracks (large, 256px)
+            (when (and track (infrasonic-p track) (display-graphic-p))
+              (listen-infrasonic--insert-cover-art track 256))
             (insert (with-face "Artist: " 'bold)
                     (with-face (metadata "artist" track) 'listen-artist) "\n")
             (insert (with-face " Title: " 'bold)
@@ -596,8 +596,8 @@ If DISPLAYP, show the buffer; otherwise just update existing one."
                     (propertize (metadata "album" track)
                                 'face 'listen-album
                                 'wrap-prefix "        ") "\n")
-            ;; Starred and rating for subsonic tracks
-            (when (and track (subsonic-p track))
+            ;; Starred and rating for infrasonic tracks
+            (when (and track (infrasonic-p track))
               (insert (with-face "  Star: " 'bold)
                       (if (starred-p track)
                           (propertize "★ Starred" 'face 'listen-starred)
