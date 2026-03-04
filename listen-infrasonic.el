@@ -590,8 +590,6 @@ TYPE is passed to `infrasonic-get-album-list', and may be:
 ;; full library. So we generate a taxy view of just artists, and then a proper listen-library view
 ;; of the artist's albums and songs.
 
-(defvar listen-infrasonic-library--artists-library "*Listen OpenSubsonic Artists*")
-
 (defvar-keymap listen-infrasonic-library-artists-mode-map
   :parent magit-section-mode-map
   "RET" #'listen-infrasonic-library-open-artist
@@ -640,7 +638,8 @@ artists with missing names."
                    :name "Artists"
                    :take (apply-partially #'taxy-take-keyed
                                           (list #'listen-infrasonic-library--artist-index-key))))
-    (with-current-buffer (get-buffer-create listen-infrasonic-library--artists-library)
+    (with-current-buffer (get-buffer-create
+                          (format "*Listen: %s Artists*" listen-infrasonic-server-name))
       (listen-infrasonic-library-artists-mode)
       (let ((inhibit-read-only t))
         (erase-buffer)
@@ -670,7 +669,7 @@ Used to get the artist the user selected, and should be passed to
     (unless artist
       (user-error "No artist at point"))
     (let* ((artist-id (alist-get 'id artist))
-           (artist-name (or (alist-get 'name artist) "OpenSubsonic Artist")))
+           (artist-name (or (alist-get 'name artist) "Unknown Artist")))
       (unless artist-id
         (user-error "Artist has no id"))
       (let* ((songs (infrasonic-get-all-songs client artist-id :artist))
@@ -727,7 +726,7 @@ Selecting an artist or album expands it to all its songs."
 
 (defun listen-infrasonic-library-search (query)
   "Search for QUERY and show selected results in a `listen-library' view."
-  (interactive (list (read-string "Search OpenSubsonic: ")))
+  (interactive (list (read-string (format "Search %s: " listen-infrasonic-server-name))))
   (let ((tracks (listen-infrasonic--search-select query)))
     (if tracks
         (listen-library tracks :name (format "%s search: %s" listen-infrasonic-server-name query))
@@ -831,7 +830,7 @@ RATING of 0 removes the rating."
 
 (defun listen-infrasonic-update-playlist (queue)
   "Update a server playlist with tracks from QUEUE.
-Only OpenSubsonic-sourced tracks in QUEUE will be included.
+Only `infrasonic'-sourced tracks in QUEUE will be included.
 The playlist's track list is replaced entirely."
   (interactive (list (listen-queue-complete)))
   (let* ((playlists (infrasonic-get-playlists (listen-infrasonic--client)))
@@ -846,7 +845,7 @@ The playlist's track list is replaced entirely."
         (progn
           (infrasonic-update-playlist (listen-infrasonic--client) id ids)
           (message "Updated playlist \"%s\" with %d tracks" name (length ids)))
-      (user-error "No OpenSubsonic tracks found in queue"))))
+      (user-error "No remote tracks found in queue"))))
 
 (defun listen-infrasonic-rename-playlist ()
   "Rename a server playlist."
