@@ -223,7 +223,7 @@ Only tracks with the source \"infrasonic\" will be included."
                      (listen-queue-tracks queue))))
     (if ids
         (infrasonic-create-playlist (listen-infrasonic--client) ids name)
-      (user-error "No Infrasonic tracks found"))))
+      (user-error "No remote tracks found"))))
 
 (defun listen-infrasonic--scrobble (player status &optional callback errback)
   "Scrobble the STATUS of the current track playing in PLAYER's queue to
