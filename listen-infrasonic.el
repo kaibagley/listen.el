@@ -53,7 +53,14 @@
 (defcustom listen-infrasonic-url nil
   "The fully-qualified domain name of your OpenSubsonic-compatible server.
 For example, \"music.example.com\" or \"192.168.0.0:4533\".
-Don't include the procol/scheme or the resource path."
+Don't include the protocol/scheme or the resource path."
+  :type 'string
+  :group 'listen-infrasonic)
+
+;;;###autoload
+(defcustom listen-infrasonic-server-name "OpenSubsonic server"
+  "Display name for your OpenSubsonic-compatible music server.
+Displayed in UI, prompts and messages."
   :type 'string
   :group 'listen-infrasonic)
 
@@ -93,7 +100,7 @@ Must be either \"http\" or \"https\" (default)."
 
 (defface listen-starred
   '((t :inherit font-lock-warning-face))
-  "Face for starred OpenSubsonic tracks."
+  "Face for starred `infrasonic'-source tracks."
   :group 'listen-infrasonic)
 
 (defvar listen-infrasonic--client nil
@@ -202,7 +209,7 @@ LEVEL determines what level of the hierarchy we are on:
 ;;;; Write requests
 
 (defun listen-infrasonic-create-playlist (queue name)
-  "Create an OpenSubsonic playlist named NAME from tracks in QUEUE.
+  "Create a playlist named NAME from tracks in QUEUE.
 Returns the response data from a call to \"createPlaylist\".
 
 Only tracks with the source \"infrasonic\" will be included."
@@ -289,9 +296,9 @@ ENTRIES is an alist of display strings, and its corresponding
 value ((disp-str . item) ...).
 
 EXTRA-METADATA is an alist of completion metadata pairs for
-`completing-read', to be `cons'ed with
+`completing-read', to be cons-ed with
 (category . listen-infrasonic). For example:
-'((affixation-function . <fn>)
+\='((affixation-function . <fn>)
   (group-function . <fn>)
   (display-sort-function . identity)
   (cycle-sort-function . identity))."
@@ -404,14 +411,14 @@ ITEM must include element with `car' \"starred\"."
   (concat (number-to-string (or (alist-get 'songCount playlist) 0)) " tracks"))
 
 (defun listen-infrasonic--read-playlist ()
-  "Prompt user to select a OpenSubsonic playlist using `completing-read'.
+  "Prompt user to select a playlist using `completing-read'.
 Returns the selected playlist's ID as a string."
   (let* ((playlists (infrasonic-get-playlists (listen-infrasonic--client)))
          (name (completing-read "Playlist: " playlists nil t)))
     (alist-get name playlists nil nil #'equal)))
 
 (defun listen-infrasonic--read-album (albums &optional prompt sort-comp affix-fn)
-  "Prompt user to select a OpenSubsonic album using `completing-read'.
+  "Prompt user to select an album using `completing-read'.
 Returns the selected album's ID as a string.
 
 PROMPT is an optional string for the prompt, defaunting to \"Album: \".
@@ -450,9 +457,9 @@ Returns a list of N `listen-track's."
 ;;;; Add to queue functions
 
 (transient-define-prefix listen-infrasonic-queue-menu ()
-  "Queue tracks from OpenSubsonic."
+  "Queue tracks from music server."
   :info-manual "(listen) OpenSubsonic Queue"
-  ["Queue from OpenSubsonic"
+  [(format "Queue from %s" listen-infrasonic-server-name)
    ["Albums"
     ("n" "New releases" listen-infrasonic-queue-recent-release)
     ("m" "Most played" listen-infrasonic-queue-most-played)
@@ -591,7 +598,7 @@ TYPE is passed to `infrasonic-get-album-list', and may be:
   "g" #'listen-infrasonic-library)
 
 (define-derived-mode listen-infrasonic-library-artists-mode magit-section-mode "Listen-Infrasonic-Artists"
-  "Browse artists on your OpenSubsonic server.")
+  "Browse artists on your OpenSubsonic-compatible server.")
 
 (defun listen-infrasonic-library--artist-index-key (artist)
   "Group ARTIST by first letter.
@@ -613,7 +620,7 @@ artists with missing names."
 
 ;;;###autoload
 (defun listen-infrasonic-library ()
- "Open a library view of all OpenSubsonic artists.
+ "Open a library view of all artists on the server.
 
 `RET' opens that artist in an actual `listen-library' library view."
   (interactive)
@@ -648,8 +655,8 @@ artists with missing names."
 
 Used to get the artist the user selected, and should be passed to
 `listen-infrasonic-library-open-artist'."
-  (when-let ((sec (magit-current-section))
-             (val (oref sec value)))
+  (when-let* ((sec (magit-current-section))
+              (val (oref sec value)))
     (when (and (listp val)
                (eq (alist-get 'infrasonic-type val) :artist))
       val)))
@@ -669,7 +676,7 @@ Used to get the artist the user selected, and should be passed to
       (let* ((songs (infrasonic-get-all-songs client artist-id :artist))
              (tracks (mapcar (lambda (s) (listen-infrasonic--json-to-listen s client))
                              songs)))
-        (listen-library tracks :name (format "OpenSubsonic: %s" artist-name))))))
+        (listen-library tracks :name (format "%s: %s" listen-infrasonic-server-name artist-name))))))
 
 ;;;; Search
 
@@ -711,7 +718,7 @@ Selecting an artist or album expands it to all its songs."
 (defun listen-infrasonic-queue-search (query queue)
   "Search for QUERY and add selected results to QUEUE."
   (interactive
-   (list (read-string "Search OpenSubsonic: ")
+   (list (read-string (format "Search %s: " listen-infrasonic-server-name))
          (listen-queue-complete :allow-new-p t)))
   (let ((tracks (listen-infrasonic--search-select query)))
     (if tracks
@@ -723,7 +730,7 @@ Selecting an artist or album expands it to all its songs."
   (interactive (list (read-string "Search OpenSubsonic: ")))
   (let ((tracks (listen-infrasonic--search-select query)))
     (if tracks
-        (listen-library tracks :name (format "OpenSubsonic search: %s" query))
+        (listen-library tracks :name (format "%s search: %s" listen-infrasonic-server-name query))
       (user-error "No results for \"%s\"" query))))
 
 ;;;; Cover art
@@ -813,7 +820,7 @@ RATING of 0 removes the rating."
 ;;;; Playlists
 
 (defun listen-infrasonic-delete-playlist ()
-  "Delete a OpenSubsonic playlist selected with completion."
+  "Delete a playlist from the server selected with completion."
   (interactive)
   (let* ((playlists (infrasonic-get-playlists (listen-infrasonic--client)))
          (name (completing-read "Delete playlist: " playlists nil t))
@@ -823,7 +830,7 @@ RATING of 0 removes the rating."
       (message "Deleted playlist \"%s\"" name))))
 
 (defun listen-infrasonic-update-playlist (queue)
-  "Update a OpenSubsonic playlist with tracks from QUEUE.
+  "Update a server playlist with tracks from QUEUE.
 Only OpenSubsonic-sourced tracks in QUEUE will be included.
 The playlist's track list is replaced entirely."
   (interactive (list (listen-queue-complete)))
@@ -842,7 +849,7 @@ The playlist's track list is replaced entirely."
       (user-error "No OpenSubsonic tracks found in queue"))))
 
 (defun listen-infrasonic-rename-playlist ()
-  "Rename a OpenSubsonic playlist."
+  "Rename a server playlist."
   (interactive)
   (let* ((playlists (infrasonic-get-playlists (listen-infrasonic--client)))
          (old-name (completing-read "Rename playlist: " playlists nil t))
