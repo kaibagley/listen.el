@@ -45,30 +45,8 @@
 ;;;; Customisation
 
 ;;;###autoload
-(defun listen-infrasonic--build-client ()
-  "Build or rebuild our `listen-infrasonic--client' from `listen' user options."
-  (setq listen-infrasonic--client
-        (when (and (stringp listen-infrasonic-url)
-                   (not (string-empty-p listen-infrasonic-url)))
-          (infrasonic-make-client
-           :url listen-infrasonic-url
-           :protocol listen-infrasonic-protocol
-           :user-agent "listen.el"
-           :api-version listen-infrasonic-api-version
-           :queue-limit listen-infrasonic-queue-limit
-           :timeout listen-infrasonic-timeout
-           :art-size 128
-           :search-max-results listen-infrasonic-search-max-results))))
-
-;;;###autoload
-(defun listen-infrasonic--custom-set (symbol value)
-  "Rebuild the `infrasonic' client with SYMBOL set to VALUE."
-  (set-default symbol value)
-  (listen-infrasonic--build-client))
-
-;;;###autoload
 (defgroup listen-infrasonic nil
-  "`listen' options for the `infrasonic' backend."
+  "`listen' options for `infrasonic' backend."
   :group 'listen)
 
 ;;;###autoload
@@ -77,8 +55,7 @@
 For example, \"music.example.com\" or \"192.168.0.0:4533\".
 Don't include the procol/scheme or the resource path."
   :type 'string
-  :group 'listen-infrasonic
-  :set #'listen-infrasonic--custom-set)
+  :group 'listen-infrasonic)
 
 ;;;###autoload
 (defcustom listen-infrasonic-protocol "https"
@@ -86,36 +63,31 @@ Don't include the procol/scheme or the resource path."
 Must be either \"http\" or \"https\" (default)."
   :type '(choice (const :tag "HTTPS" "https")
                  (const :tag "HTTP" "http"))
-  :group 'listen-infrasonic
-  :set #'listen-infrasonic--custom-set)
+  :group 'listen-infrasonic)
 
 ;;;###autoload
 (defcustom listen-infrasonic-api-version "1.16.1"
   "OpenSubsonic API version string to advertise (e.g. \"1.16.1\")."
   :type 'string
-  :group 'listen-infrasonic
-  :set #'listen-infrasonic--custom-set)
+  :group 'listen-infrasonic)
 
 ;;;###autoload
 (defcustom listen-infrasonic-timeout 300
   "Request timeout in seconds passed to `plz'."
   :type 'integer
-  :group 'listen-infrasonic
-  :set #'listen-infrasonic--custom-set)
+  :group 'listen-infrasonic)
 
 ;;;###autoload
 (defcustom listen-infrasonic-queue-limit 5
   "Max concurrent downloads for `infrasonic''s `plz' queue."
   :type 'integer
-  :group 'listen-infrasonic
-  :set #'listen-infrasonic--custom-set)
+  :group 'listen-infrasonic)
 
 ;;;###autoload
 (defcustom listen-infrasonic-search-max-results 200
   "Maximum number of results returned by search queries."
   :type 'integer
-  :group 'listen-infrasonic
-  :set #'listen-infrasonic--custom-set)
+  :group 'listen-infrasonic)
 
 ;; Users set infrasonic variables for URL, protocol, etc.
 
@@ -138,6 +110,21 @@ Must be either \"http\" or \"https\" (default)."
 
 ;;;; General helpers
 
+(defun listen-infrasonic--build-client ()
+  "Build or rebuild our `listen-infrasonic--client' from `listen' user options."
+  (setq listen-infrasonic--client
+        (condition-case nil
+            (infrasonic-make-client
+             :url listen-infrasonic-url
+             :protocol listen-infrasonic-protocol
+             :user-agent "listen.el"
+             :api-version listen-infrasonic-api-version
+             :queue-limit listen-infrasonic-queue-limit
+             :timeout listen-infrasonic-timeout
+             :art-size 128
+             :search-max-results listen-infrasonic-search-max-results)
+          (infrasonic-error nil))))
+
 (defun listen-infrasonic--client ()
   "Return the current `infrasonic' client, or build a new one and return that."
   (or listen-infrasonic--client
@@ -145,6 +132,19 @@ Must be either \"http\" or \"https\" (default)."
         (listen-infrasonic--build-client)
         (or listen-infrasonic--client
             (user-error "Please set `listen-infrasonic-url'.")))))
+
+(defun listen-infrasonic--invalidate-client (&rest _)
+  "Invalidate the cached client to allow rebuilding."
+  (setq listen-infrasonic--client nil))
+
+;; Add a variable watcher to reset the client on changes to custom variables
+(dolist (sym '(listen-infrasonic-url
+               listen-infrasonic-protocol
+               listen-infrasonic-api-version
+               listen-infrasonic-timeout
+               listen-infrasonic-queue-limit
+               listen-infrasonic-search-max-results))
+  (add-variable-watcher sym #'listen-infrasonic--invalidate-client))
 
 (defun listen-infrasonic--json-to-listen (json-data &optional client)
   "Convert an `infrasonic' JSON-DATA into a `listen-track'.
@@ -158,7 +158,7 @@ Returns a `listen-track' struct."
        :artist artist
        :title title
        :album album
-       :number (number-to-string (or track 0))
+       :number (when track (number-to-string track))
        :genre genre
        :duration (or duration 0)
        :date year
@@ -230,7 +230,7 @@ STATUS may be either `:playing' or `:finished'.
 CALLBACK and ERRBACK are optional parameters enabling asynchronous scrobbling."
   (when-let* ((queue (map-elt (listen-player-etc player) :queue))
               (track (listen-queue-current queue))
-              (source (equal (map-elt (listen-track-etc track) 'source) "infrasonic"))
+              (source (equal (alist-get 'source (listen-track-etc track)) "infrasonic"))
               (id (alist-get 'id (listen-track-etc track))))
     (infrasonic-scrobble (listen-infrasonic--client) id status callback errback)))
 
@@ -847,8 +847,10 @@ The playlist's track list is replaced entirely."
   (let* ((playlists (infrasonic-get-playlists (listen-infrasonic--client)))
          (old-name (completing-read "Rename playlist: " playlists nil t))
          (id (alist-get old-name playlists nil nil #'equal))
-         (new-name (read-string (format "Rename \"%s\" to: " old-name) old-name)))
-    (infrasonic-update-playlist (listen-infrasonic--client) id nil new-name)
+         (new-name (read-string (format "Rename \"%s\" to: " old-name) old-name))
+         (songs (infrasonic-get-playlist-songs (listen-infrasonic--client) id))
+         (song-ids (mapcar (lambda (s) (alist-get 'id s)) songs)))
+    (infrasonic-update-playlist (listen-infrasonic--client) id song-ids new-name)
     (message "Renamed playlist to \"%s\"" new-name)))
 
 (provide 'listen-infrasonic)
