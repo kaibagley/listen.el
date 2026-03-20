@@ -459,7 +459,7 @@ Returns a list of N `listen-track's."
 (transient-define-prefix listen-infrasonic-queue-menu ()
   "Queue tracks from music server."
   :info-manual "(listen) OpenSubsonic Queue"
-  [(format "Queue from %s" listen-infrasonic-server-name)
+  [:description (lambda () (format "Queue from %s" listen-infrasonic-server-name))
    ["Albums"
     ("n" "New releases" listen-infrasonic-queue-recent-release)
     ("m" "Most played" listen-infrasonic-queue-most-played)
