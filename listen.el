@@ -5,7 +5,7 @@
 ;; Author: Adam Porter <adam@alphapapa.net>
 ;; Maintainer: Adam Porter <adam@alphapapa.net>
 ;; Keywords: multimedia
-;; Package-Requires: ((emacs "29.1") (persist "0.6") (taxy "0.10") (taxy-magit-section "0.13") (transient "0.5.3") (plz "0.9") (svg-lib "0.3") (infrasonic "0.1"))
+;; Package-Requires: ((emacs "29.1") (persist "0.6") (taxy "0.10") (taxy-magit-section "0.13") (transient "0.5.3") (plz "0.9") (svg-lib "0.3") (infrasonic "0.4"))
 ;; Version: 0.10-pre
 ;; URL: https://github.com/alphapapa/listen.el
 
@@ -94,11 +94,15 @@ and adds an ellipsis where it occurs."
 
 (defcustom listen-lighter-symbols-list '("🎵" "▶" "⏸" "■")
   "List of symbols to use in the `listen-mode-lighter'.
-Must contain 3 elements:
+Must contain 4 elements:
 1. Some musical symbol (defaults to 🎵)
 2. Play symbol (defaults to ▶)
 3. Pause symbol (defaults to ⏸)
-4. Stop symbol (defaults to ■)")
+4. Stop symbol (defaults to ■)"
+  :type '(list (string :tag "Music")
+               (string :tag "Playing")
+               (string :tag "Paused")
+               (string :tag "Stopped")))
 
 (defcustom listen-lighter-format "%m:%s %a: %t (%r)%E "
   "Format for mode line lighter.
@@ -280,7 +284,7 @@ According to `listen-lighter-format', which see."
                             (propertize (or (alist-get 'album metadata nil nil #'equal) "")
                                         'face 'listen-lighter-album)))
                    (?t . ,(lambda ()
-                            (if-let ((title (alist-get 'title metadata nil nil #'equal)))
+                            (if-let* ((title (alist-get 'title metadata nil nil #'equal)))
                                 (propertize
                                  (truncate-string-to-width title listen-lighter-title-max-length
                                                            nil nil t)
@@ -303,14 +307,14 @@ According to `listen-lighter-format', which see."
                                           (_ ""))
                                         'face 'bold)))
                    (?E . ,(lambda ()
-                            (if-let ((extra (mapconcat #'funcall listen-lighter-extra-functions " ")))
+                            (if-let* ((extra (mapconcat #'funcall listen-lighter-extra-functions " ")))
                                 (propertize (concat " " extra)
                                             'face 'listen-lighter-extra)
                               "")))))))
 
 (defun listen-lighter-format-rating ()
   "Return the rating of the current track for display in the lighter."
-  (when-let ((player (listen-current-player))
+  (when-let* ((player (listen-current-player))
              (queue (map-elt (listen-player-etc player) :queue))
              (track (listen-queue-current queue))
              (rating (or (listen-track-rating track)
@@ -342,8 +346,8 @@ According to `listen-lighter-format', which see."
 
 (defun listen-play-next (player)
   "Play PLAYER's queue's next track and return non-nil if playing."
-  (when-let ((queue (map-elt (listen-player-etc player) :queue)))
-    (if-let ((next-track (listen-queue-next-track queue)))
+  (when-let* ((queue (map-elt (listen-player-etc player) :queue)))
+    (if-let* ((next-track (listen-queue-next-track queue)))
         (progn
           (listen-queue-play queue next-track)
           t)
@@ -440,7 +444,7 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
           listen-player)
     :description
     (lambda ()
-      (if-let ((listen-player)
+      (if-let* ((listen-player)
                (volume (listen--volume listen-player)))
           (format "Volume: %.0f%%" volume)
         "Volume: N/A"))
@@ -479,7 +483,7 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
   [["Queue mode"
     :description
     (lambda ()
-      (if-let ((player listen-player)
+      (if-let* ((player listen-player)
                (queue (map-elt (listen-player-etc player) :queue)))
           (format "Queue: %s (track %s/%s)" (listen-queue-name queue)
                   (cl-position (listen-queue-current queue) (listen-queue-tracks queue))
@@ -491,7 +495,7 @@ TIME is a string like \"SS\", \"MM:SS\", or \"HH:MM:SS\"."
                            (interactive)
                            (listen-queue (map-elt (listen-player-etc (listen-current-player)) :queue)))
      :if (lambda ()
-           (if-let ((player listen-player))
+           (if-let* ((player listen-player))
                (map-elt (listen-player-etc player) :queue))))
     ("qo" "View other" listen-queue)
     ("qp" "Play other" listen-queue-play
