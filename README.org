@@ -13,7 +13,7 @@ The only external dependency is either [[https://mpv.io/][MPV]] or [[https://www
 
 Queues are provided as the means to play consecutive tracks, and they are shown in a ~vtable~-based view buffer.  They are persisted between sessions using the ~persist~ library, and they may be bookmarked.
 
-The primary interface to one's music library is through the filesystem, by selecting a file to play, or by adding files and directories to a queue.  Although MPD is not required, support is provided for finding files from a local MPD server's library using MPD's metadata searching. The package also support playing from OpenSubsonic-compatible servers such as Navidrome or Gonic.
+The primary interface to one's music library is through the filesystem, by selecting a file to play, or by adding files and directories to a queue.  Although MPD is not required, support is provided for finding files from a local MPD server's library using MPD's metadata searching.  The package also supports playback from OpenSubsonic-compatible servers such as Navidrome or Gonic.
 
 A simple "library" view is provided that shows a list of files organized into a hierarchy by genre, date, artist, album, etc.  (This will be made more configurable and useful in the future.)
 
@@ -61,7 +61,10 @@ One might also use systems like [[https://github.com/progfolio/elpaca][Elpaca]] 
 * Configuration
 Listen is intended to work with little-to-no configuration.  You can set the ~listen-directory~ to the location of your music library if it's not at ~~/Music~.  See ~M-x customize-group RET listen RET~.
 
-For use with OpenSubsonic-compatible music servers, you must set ~listen-subsonic-url~.
+For use with an OpenSubsonic-compatible music server, set
+~listen-infrasonic-url~.  Credentials are read from ~auth-source~ using that
+host.  If multiple accounts share the host, also set
+~listen-infrasonic-username~.
 
 * Usage
 Use the command ~listen~ to show the Transient menu.  From there, it is--hopefully--self-explanatory.  Please feel free to give feedback if it doesn't seem so.  For more information, see the following sections.
@@ -212,7 +215,7 @@ The ~listen-mode~ minor mode runs a timer which plays the next track in the curr
 ** v0.10
 
 *Additions*
-- OpenSubsonic server supoort.
+- OpenSubsonic server support.
 - [[https://mpv.io/][MPV]] support (works asynchronously, to improve performance and avoid blocking Emacs).
 - Command ~listen-status~, which shows a status buffer (contributions to it are welcome).
 - Command ~listen-queue-add-tracks~, when used in a Dired buffer, uses the marked files or the one at point.

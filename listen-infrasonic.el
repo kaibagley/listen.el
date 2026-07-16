@@ -32,10 +32,12 @@
 (require 'infrasonic)   ; For OpenSubsonic backend
 (require 'listen-queue) ; Add tracks to queue
 (require 'svg-lib)      ; For starred icon
+(require 'taxy-magit-section) ; Server library view
 
 (require 'subr-x)       ; string-empty-p
 (require 'map)          ; map-let/elt
 (require 'cl-lib)       ; cl-incf
+(require 'seq)          ; seq-remove
 (require 'transient)    ; Transient menus
 
 ;; Declares
@@ -55,6 +57,14 @@
 For example, \"music.example.com\" or \"192.168.0.0:4533\".
 Don't include the protocol/scheme or the resource path."
   :type 'string
+  :group 'listen-infrasonic)
+
+;;;###autoload
+(defcustom listen-infrasonic-username nil
+  "Username used to select an `auth-source' entry for the server.
+Leave nil when there is only one matching login for
+`listen-infrasonic-url'."
+  :type '(choice (const :tag "Select by host only" nil) string)
   :group 'listen-infrasonic)
 
 ;;;###autoload
@@ -123,6 +133,7 @@ Must be either \"http\" or \"https\" (default)."
         (condition-case nil
             (infrasonic-make-client
              :url listen-infrasonic-url
+             :username listen-infrasonic-username
              :protocol listen-infrasonic-protocol
              :user-agent "listen.el"
              :api-version listen-infrasonic-api-version
@@ -146,6 +157,7 @@ Must be either \"http\" or \"https\" (default)."
 
 ;; Add a variable watcher to reset the client on changes to custom variables
 (dolist (sym '(listen-infrasonic-url
+               listen-infrasonic-username
                listen-infrasonic-protocol
                listen-infrasonic-api-version
                listen-infrasonic-timeout
@@ -210,7 +222,7 @@ LEVEL determines what level of the hierarchy we are on:
 
 (defun listen-infrasonic-create-playlist (queue name)
   "Create a playlist named NAME from tracks in QUEUE.
-Returns the response data from a call to \"createPlaylist\".
+Return the created playlist.
 
 Only tracks with the source \"infrasonic\" will be included."
   (interactive
@@ -222,7 +234,10 @@ Only tracks with the source \"infrasonic\" will be included."
                            (list (alist-get 'id etc)))))
                      (listen-queue-tracks queue))))
     (if ids
-        (infrasonic-create-playlist (listen-infrasonic--client) ids name)
+        (prog1 (infrasonic-create-playlist
+                (listen-infrasonic--client) ids name)
+          (message "Created playlist \"%s\" with %d tracks"
+                   name (length ids)))
       (user-error "No remote tracks found"))))
 
 (defun listen-infrasonic--scrobble (player status &optional callback errback)
@@ -351,13 +366,16 @@ PREFIX-FACE is applied to the prefix."
 Returns a sort function for sorting `completing-read' candidates.
 
 COMP is a binary (lambda (album-a album-b) ...) and is applied after
-mapping candidate strings back to album objects via ENTRIES."
-  (lambda (cands)
-    (sort (copy-sequence cands)
-          (lambda (sa sb)
-            (funcall comp
-                     (alist-get sa entries nil nil #'equal)
-                     (alist-get sb entries nil nil #'equal))))))
+mapping candidate strings back to album objects via ENTRIES.  When COMP
+is nil, preserve the server's result order."
+  (if (null comp)
+      #'identity
+    (lambda (cands)
+      (sort (copy-sequence cands)
+            (lambda (sa sb)
+              (funcall comp
+                       (alist-get sa entries nil nil #'equal)
+                       (alist-get sb entries nil nil #'equal)))))))
 
 (defun listen-infrasonic--format-column (str width &optional face)
   "Format STR to fit WIDTH.
@@ -407,15 +425,48 @@ ITEM must include element with `car' \"starred\"."
             " ")))
 
 (defun listen-infrasonic--playlist-suffix (playlist)
-  "Returns PLAYLIST's song count to be used as an `affixation-function' suffix."
-  (concat (number-to-string (or (alist-get 'songCount playlist) 0)) " tracks"))
+  "Return PLAYLIST metadata for an `affixation-function' suffix."
+  (format "%s tracks%s"
+          (or (alist-get 'songCount playlist) 0)
+          (if (alist-get 'readonly playlist) " (read-only)" "")))
 
-(defun listen-infrasonic--read-playlist ()
-  "Prompt user to select a playlist using `completing-read'.
-Returns the selected playlist's ID as a string."
+(defun listen-infrasonic--playlist-entries (playlists)
+  "Return unique display entries for PLAYLISTS.
+Duplicate playlist names are disambiguated with their IDs."
+  (let ((counts (make-hash-table :test #'equal)))
+    (dolist (playlist playlists)
+      (let ((name (or (alist-get 'name playlist) "[unnamed playlist]")))
+        (puthash name (1+ (gethash name counts 0)) counts)))
+    (mapcar
+     (lambda (playlist)
+       (let* ((name (or (alist-get 'name playlist) "[unnamed playlist]"))
+              (display (if (> (gethash name counts) 1)
+                           (format "%s [%s]" name (alist-get 'id playlist))
+                         name)))
+         (cons display playlist)))
+     playlists)))
+
+(defun listen-infrasonic--read-playlist (&optional prompt editable-only)
+  "Prompt for and return a complete playlist object.
+PROMPT defaults to \"Playlist: \".  When EDITABLE-ONLY is non-nil,
+omit playlists whose `readonly' field is non-nil."
   (let* ((playlists (infrasonic-get-playlists (listen-infrasonic--client)))
-         (name (completing-read "Playlist: " playlists nil t)))
-    (alist-get name playlists nil nil #'equal)))
+         (playlists (if editable-only
+                        (seq-remove (lambda (playlist)
+                                      (alist-get 'readonly playlist))
+                                    playlists)
+                      playlists))
+         (entries (listen-infrasonic--playlist-entries playlists)))
+    (unless entries
+      (user-error (if editable-only
+                      "No editable playlists found"
+                    "No playlists found")))
+    (listen-infrasonic--completing-read
+     (or prompt "Playlist: ")
+     entries
+     `((affixation-function
+        . ,(listen-infrasonic--affixation
+            entries #'listen-infrasonic--playlist-suffix 'shadow))))))
 
 (defun listen-infrasonic--read-album (albums &optional prompt sort-comp affix-fn)
   "Prompt user to select an album using `completing-read'.
@@ -461,7 +512,7 @@ Returns a list of N `listen-track's."
   :info-manual "(listen) OpenSubsonic Queue"
   [:description (lambda () (format "Queue from %s" listen-infrasonic-server-name))
    ["Albums"
-    ("n" "New releases" listen-infrasonic-queue-recent-release)
+    ("n" "Recently added" listen-infrasonic-queue-recently-added)
     ("m" "Most played" listen-infrasonic-queue-most-played)
     ("r" "Recently listened" listen-infrasonic-queue-recent-play)
     ("*" "Starred albums" listen-infrasonic-queue-starred-album)]
@@ -487,7 +538,8 @@ Returns a list of N `listen-track's."
 (defun listen-infrasonic-queue-playlist (queue)
   "Prompt for a playlist and add its tracks to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
-  (let* ((id (listen-infrasonic--read-playlist))
+  (let* ((playlist (listen-infrasonic--read-playlist))
+         (id (alist-get 'id playlist))
          (tracks (listen-infrasonic--get-playlist-tracks id)))
     (listen-queue-add-tracks tracks queue)))
 
@@ -505,9 +557,10 @@ Returns a list of N `listen-track's."
 TYPE is passed to `infrasonic-get-album-list', and may be:
 - A genre string, for example: \"Rock\".
 - `:random': Random albums.
-- `:newest': Newest albums by release date.
+- `:newest': Most recently added albums.
+- `:highest': Highest-rated albums.
 - `:frequent': User's most frequently played albums.
-- `:recent': Recently added albums.
+- `:recent': Most recently played albums.
 - `:starred': Starred albums.
 - `:byname': Alphabetically sorted by name.
 - `:byartist': Alphabetically sorted by artist."
@@ -518,26 +571,16 @@ TYPE is passed to `infrasonic-get-album-list', and may be:
          (tracks (listen-infrasonic--get-all-tracks (alist-get 'id album) :album)))
     (listen-queue-add-tracks tracks queue)))
 
-(defun listen-infrasonic-queue-recent-release (queue)
-  "Add a recently released album to QUEUE."
+(defun listen-infrasonic-queue-recently-added (queue)
+  "Add a recently added album to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
-  ;; Sort by year, then alphabetically
-  (let ((sort-comp
-         (lambda (a b)
-           (let* ((ya (or (alist-get 'year a) 0))
-                  (yb (or (alist-get 'year b) 0))
-                  (ya (if (stringp ya) (string-to-number ya) ya))
-                  (yb (if (stringp yb) (string-to-number yb) yb)))
-             (cond
-              ;; Different year -> numeric
-              ((/= ya yb) (> ya yb))
-              ;; Same year -> alphabetical
-              (t (string-lessp (or (alist-get 'name a) "")
-                               (or (alist-get 'name b) ""))))))))
-    (listen-infrasonic--queue-album-from-list queue
-                                            :newest
-                                            "Recently released albums: "
-                                            sort-comp)))
+  (listen-infrasonic--queue-album-from-list
+   queue :newest "Recently added albums: "))
+
+(define-obsolete-function-alias
+  'listen-infrasonic-queue-recent-release
+  'listen-infrasonic-queue-recently-added
+  "0.10")
 
 (defun listen-infrasonic-queue-most-played (queue)
   "Add a frequently played album to QUEUE."
@@ -562,15 +605,8 @@ TYPE is passed to `infrasonic-get-album-list', and may be:
 (defun listen-infrasonic-queue-recent-play (queue)
   "Add a recently played album to QUEUE."
   (interactive (list (listen-queue-complete :allow-new-p t)))
-  (let ((sort-comp
-         (lambda (a b)
-           (let* ((ta (float-time (date-to-time (or (alist-get 'created a) 0))))
-                  (tb (float-time (date-to-time (or (alist-get 'created b) 0)))))
-             (> ta tb)))))
-    (listen-infrasonic--queue-album-from-list queue
-                                            :recent
-                                            "Recently played albums: "
-                                            sort-comp)))
+  (listen-infrasonic--queue-album-from-list
+   queue :recent "Recently played albums: "))
 
 (defun listen-infrasonic-queue-starred-album (queue)
   "Add a starred album to QUEUE."
@@ -801,7 +837,7 @@ RATING of 0 removes the rating."
      (unless track
        (user-error "No track playing"))
      (list track (read-number "Rating (0-5): "
-                              (if-let ((r (listen-track-rating track)))
+                              (if-let* ((r (listen-track-rating track)))
                                   (round (* 5 (string-to-number r)))
                                 0)))))
   (unless (and (integerp rating) (<= 0 rating 5))
@@ -821,9 +857,10 @@ RATING of 0 removes the rating."
 (defun listen-infrasonic-delete-playlist ()
   "Delete a playlist from the server selected with completion."
   (interactive)
-  (let* ((playlists (infrasonic-get-playlists (listen-infrasonic--client)))
-         (name (completing-read "Delete playlist: " playlists nil t))
-         (id (alist-get name playlists nil nil #'equal)))
+  (let* ((playlist (listen-infrasonic--read-playlist
+                    "Delete playlist: " t))
+         (name (alist-get 'name playlist))
+         (id (alist-get 'id playlist)))
     (when (yes-or-no-p (format "Really delete playlist \"%s\"? " name))
       (infrasonic-delete-playlist (listen-infrasonic--client) id)
       (message "Deleted playlist \"%s\"" name))))
@@ -833,9 +870,10 @@ RATING of 0 removes the rating."
 Only `infrasonic'-sourced tracks in QUEUE will be included.
 The playlist's track list is replaced entirely."
   (interactive (list (listen-queue-complete)))
-  (let* ((playlists (infrasonic-get-playlists (listen-infrasonic--client)))
-         (name (completing-read "Update playlist: " playlists nil t))
-         (id (alist-get name playlists nil nil #'equal))
+  (let* ((playlist (listen-infrasonic--read-playlist
+                    "Update playlist: " t))
+         (name (alist-get 'name playlist))
+         (id (alist-get 'id playlist))
          (ids (mapcan (lambda (track)
                         (let ((etc (listen-track-etc track)))
                           (when (equal (alist-get 'source etc) "infrasonic")
@@ -843,20 +881,20 @@ The playlist's track list is replaced entirely."
                       (listen-queue-tracks queue))))
     (if ids
         (progn
-          (infrasonic-update-playlist (listen-infrasonic--client) id ids)
+          (infrasonic-replace-playlist (listen-infrasonic--client) id ids)
           (message "Updated playlist \"%s\" with %d tracks" name (length ids)))
       (user-error "No remote tracks found in queue"))))
 
 (defun listen-infrasonic-rename-playlist ()
   "Rename a server playlist."
   (interactive)
-  (let* ((playlists (infrasonic-get-playlists (listen-infrasonic--client)))
-         (old-name (completing-read "Rename playlist: " playlists nil t))
-         (id (alist-get old-name playlists nil nil #'equal))
-         (new-name (read-string (format "Rename \"%s\" to: " old-name) old-name))
-         (songs (infrasonic-get-playlist-songs (listen-infrasonic--client) id))
-         (song-ids (mapcar (lambda (s) (alist-get 'id s)) songs)))
-    (infrasonic-update-playlist (listen-infrasonic--client) id song-ids new-name)
+  (let* ((playlist (listen-infrasonic--read-playlist
+                    "Rename playlist: " t))
+         (old-name (alist-get 'name playlist))
+         (id (alist-get 'id playlist))
+         (new-name (read-string (format "Rename \"%s\" to: " old-name)
+                                old-name)))
+    (infrasonic-update-playlist (listen-infrasonic--client) id :name new-name)
     (message "Renamed playlist to \"%s\"" new-name)))
 
 (provide 'listen-infrasonic)
